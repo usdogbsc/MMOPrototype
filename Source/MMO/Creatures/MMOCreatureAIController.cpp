@@ -256,6 +256,7 @@ void AMMOCreatureAIController::TickReturning(AMMOCreature* Creature)
 		StopMoving();
 		Creature->SetActorRotation(Home.Rotator());
 		Creature->GetHealth()->ResetHealth();
+		Creature->NotifyCombatReset();
 		ThreatTarget.Reset();
 		bWandering = false;
 		NextWanderTime = 0.0;
@@ -273,7 +274,11 @@ bool AMMOCreatureAIController::ShouldReturn(const AMMOCreature* Creature) const
 		return true;
 	}
 
-	return FVector::Dist2D(Creature->GetActorLocation(), Creature->GetSpawnTransform().GetLocation()) > Creature->LeashRange;
+	// pulled too far from home, or the target has fled well beyond this creature's territory
+	// (the second rule also frees creatures that can't reach a target, e.g. a boss in a narrow tunnel)
+	const FVector Home = Creature->GetSpawnTransform().GetLocation();
+	return FVector::Dist2D(Creature->GetActorLocation(), Home) > Creature->LeashRange
+		|| FVector::Dist2D(ThreatTarget->GetActorLocation(), Home) > Creature->LeashRange + Creature->AggroRange;
 }
 
 void AMMOCreatureAIController::MoveTowardGoal(AMMOCreature* Creature, AActor* Goal)

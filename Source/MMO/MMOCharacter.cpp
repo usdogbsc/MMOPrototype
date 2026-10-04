@@ -818,6 +818,7 @@ bool AMMOCharacter::TryInteract(AActor* Target)
 	}
 	if (!Interactable->CanInteract(this))
 	{
+		ShowPlayerMessage(IsInCombat() ? NSLOCTEXT("MMOItems", "InCombatUse", "You can't do that while in combat.") : NSLOCTEXT("MMOItems", "CantUse", "You can't use that right now."));
 		return false;
 	}
 	Interactable->Interact(this);

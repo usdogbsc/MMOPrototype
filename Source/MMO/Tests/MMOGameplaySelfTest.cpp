@@ -46,6 +46,10 @@
 #include "Professions/MMOProfessionComponent.h"
 #include "Professions/MMORecipeDefinition.h"
 #include "World/MMOGatherNode.h"
+#include "World/MMOPortal.h"
+#include "World/MMOTelegraph.h"
+#include "Creatures/MMORustback.h"
+#include "Creatures/MMORustQueen.h"
 #include "World/MMOCraftingStation.h"
 #include "UI/MMOCraftingWindowWidget.h"
 #include "Combat/MMOAbilityDefinition.h"
@@ -82,6 +86,13 @@ namespace MMOSelfTest
 		int32 ActionIndex = INDEX_NONE;
 		TWeakObjectPtr<AMMOCreature> AbilityTarget;
 		TWeakObjectPtr<AMMOGatherNode> Node;
+		TWeakObjectPtr<AMMORustQueen> Queen;
+		TWeakObjectPtr<AMMOTelegraph> Telegraph;
+		int32 Detonations = 0;
+		bool bLastDetonationHitPlayer = false;
+		FString LastEmote;
+		FDelegateHandle DetonationHandle;
+		FDelegateHandle EmoteHandle;
 		int32 SkillMark = 0;
 		TWeakObjectPtr<AMMOCreature> AbilityBystander;
 		float OtherMark = 0.0f;
@@ -288,6 +299,18 @@ namespace MMOSelfTest
 		return nullptr;
 	}
 
+	static AMMOPortal* FindPortal(UWorld* World, FName Id)
+	{
+		for (TActorIterator<AMMOPortal> It(World); It; ++It)
+		{
+			if (It->PortalId == Id)
+			{
+				return *It;
+			}
+		}
+		return nullptr;
+	}
+
 	static int32 CountOwned(const AMMOCharacter* Player)
 	{
 		return Player->GetInventory()->GetTotalItemCount() + Player->GetEquipment()->GetEquippedCount();
@@ -299,6 +322,8 @@ namespace MMOSelfTest
 			State->Passes, State->Failures, State->Failures == 0 ? TEXT("SUCCESS") : TEXT("FAILURE"));
 
 		UMMOHealthComponent::OnAnyCombatEvent.Remove(State->CombatEventHandle);
+		AMMOTelegraph::OnAnyDetonation.Remove(State->DetonationHandle);
+		AMMORustQueen::OnBossEmote.Remove(State->EmoteHandle);
 		if (IConsoleVariable* LootChance = IConsoleManager::Get().FindConsoleVariable(TEXT("mmo.Loot.ChanceMultiplier")))
 		{
 			LootChance->Set(State->SavedLootChance);
@@ -1368,7 +1393,7 @@ namespace MMOSelfTest
 			TArray<AMMOCreature*> Idle;
 			for (TActorIterator<AMMOCreature> It(World); It; ++It)
 			{
-				if (!It->IsDead() && It->IsTargetable() && It->GetClass() != AMMODireWolf::StaticClass() && StateOf(*It) == EMMOCreatureAIState::Idle)
+				if (!It->IsDead() && It->IsTargetable() && It->IsA<AMMOGreyWolf>() && StateOf(*It) == EMMOCreatureAIState::Idle)
 				{
 					Idle.Add(*It);
 				}
@@ -1658,7 +1683,225 @@ namespace MMOSelfTest
 			}
 			break;
 
-		case 53: // save, scramble everything, load: the character comes back exactly as it was (Milestone 5)
+		case 53: // Rustvein Mine (Milestone 9): through the entrance
+		{
+			AMMOPortal* Entrance = FindPortal(World, TEXT("MineEntrance"));
+			AMMORustQueen* Queen = nullptr;
+			for (TActorIterator<AMMORustQueen> It(World); It; ++It)
+			{
+				Queen = *It;
+			}
+			if (!Entrance || !Queen)
+			{
+				UE_LOG(LogMMO, Display, TEXT("MMO SELFTEST: no dungeon in this map, skipping the mine checks"));
+				State->Step = 60;
+				State->StepStart = Now();
+				break;
+			}
+			State->Queen = Queen;
+			PlacePlayerNear(Entrance->GetActorLocation(), 200.0f);
+			Check(Player->TryInteract(Entrance) && FVector::Dist(Player->GetActorLocation(), Entrance->Destination) < 300.0f, TEXT("The boarded entrance leads into the Rustvein Mine"));
+			NextStep();
+			break;
+		}
+
+		case 54:
+			if (Elapsed() > 1.0f)
+			{
+				AMMORustQueen* Queen = State->Queen.Get();
+				Check(Player->GetExploration()->HasDiscovered(TEXT("RustveinDepths")), TEXT("Entering discovers the Rustvein Depths"));
+				int32 Beetles = 0;
+				AMMORustback* Victim = nullptr;
+				for (TActorIterator<AMMORustback> It(World); It; ++It)
+				{
+					if (!It->IsA<AMMORustQueen>())
+					{
+						++Beetles;
+						Victim = *It;
+					}
+				}
+				Check(Beetles >= 6, FString::Printf(TEXT("The mine is infested (%d Rustback Skitterers)"), Beetles));
+				Check(Victim && Victim->QuestTag == TEXT("Rustback") && Victim->GetTargetLevel() >= 4 && Victim->GetHealth()->GetMaxHealth() > Wolf->GetHealth()->GetMaxHealth(),
+					TEXT("Rustbacks are a tougher creature family than wolves"));
+				Check(Queen->bIsBoss && Queen->GetTargetLevel() == 6 && Queen->GetHealth()->GetMaxHealth() >= 1000.0f, TEXT("Grindmaw the Rust Queen is a level 6 boss"));
+
+				PlayerHealth->RestoreHealth(PlayerHealth->GetMaxHealth());
+				PlacePlayerNear(Queen->GetActorLocation(), 380.0f);
+				State->Detonations = 0;
+				State->LastEmote.Reset();
+				NextStep();
+			}
+			break;
+
+		case 55: // pulled: boss frame, then the first eruption appears under the player
+		{
+			AMMORustQueen* Queen = State->Queen.Get();
+			PlayerHealth->RestoreHealth(PlayerHealth->GetMaxHealth());
+			if (!State->bFlag && Queen && Queen->IsInCombat())
+			{
+				State->bFlag = true;
+				UMMOHUDWidget* Widget = HUDOf(Player)->GetHUDWidget();
+				Widget->UpdateBossFrame(Player, 2.0f);
+				Check(Widget->GetShownBoss() == Queen, TEXT("The boss health frame appears when the fight starts"));
+				Check(State->LastEmote.Contains(TEXT("Grindmaw")), FString::Printf(TEXT("Boss emote on pull: \"%s\""), *State->LastEmote));
+			}
+			if (State->bFlag && Queen && Queen->GetActiveTelegraph())
+			{
+				AMMOTelegraph* Telegraph = Queen->GetActiveTelegraph();
+				State->Telegraph = Telegraph;
+				Check(FVector::Dist2D(Telegraph->GetActorLocation(), Player->GetActorLocation()) < Telegraph->GetRadius(), TEXT("A Rust Eruption circle appears under the player"));
+				State->bFlag = false;
+				NextStep();
+			}
+			else if (Elapsed() > 9.0f)
+			{
+				Check(false, TEXT("The boss engaged and cast Rust Eruption"));
+				State->Step = 60;
+			}
+			break;
+		}
+
+		case 56: // standing in it hurts; for the next one, step out
+			PlayerHealth->RestoreHealth(PlayerHealth->GetMaxHealth());
+			if (State->Detonations == 1 && !State->bFlag)
+			{
+				Check(State->bLastDetonationHitPlayer, TEXT("Standing in the glow when it erupts hurts"));
+				State->bFlag = true;
+			}
+			if (State->bFlag && State->Queen.IsValid() && State->Queen->GetActiveTelegraph() && State->Queen->GetActiveTelegraph() != State->Telegraph.Get())
+			{
+				AMMOTelegraph* Next = State->Queen->GetActiveTelegraph();
+				State->Telegraph = Next;
+				PlacePlayerNear(Next->GetActorLocation(), Next->GetRadius() + 300.0f);
+				State->bFlag = false;
+				NextStep();
+			}
+			else if (Elapsed() > 14.0f)
+			{
+				Check(false, TEXT("Rust Eruption repeats"));
+				NextStep();
+			}
+			break;
+
+		case 57:
+			PlayerHealth->RestoreHealth(PlayerHealth->GetMaxHealth());
+			if (State->Detonations >= 2)
+			{
+				AMMORustQueen* Queen = State->Queen.Get();
+				Check(!State->bLastDetonationHitPlayer, TEXT("Stepping out of the circle avoids the eruption"));
+
+				// at 60% she calls her brood
+				UMMOHealthComponent* QueenHealth = Queen->GetHealth();
+				QueenHealth->ApplyDamage(QueenHealth->GetCurrentHealth() - QueenHealth->GetMaxHealth() * 0.55f, Player);
+				NextStep();
+			}
+			else if (Elapsed() > 4.0f)
+			{
+				Check(false, TEXT("The second eruption went off"));
+				NextStep();
+			}
+			break;
+
+		case 58:
+			PlayerHealth->RestoreHealth(PlayerHealth->GetMaxHealth());
+			if (Elapsed() > 0.5f && !State->bFlag)
+			{
+				AMMORustQueen* Queen = State->Queen.Get();
+				int32 Alive = 0;
+				for (const TWeakObjectPtr<AMMOCreature>& Add : Queen->GetBrood())
+				{
+					Alive += Add.IsValid() && !Add->IsDead() ? 1 : 0;
+				}
+				Check(Alive == Queen->BroodCount && State->LastEmote.Contains(TEXT("brood")), FString::Printf(TEXT("At 60%% she calls %d Rustlings"), Alive));
+
+				// run away: she leashes home, her brood vanishes and she heals
+				State->bFlag = true;
+				if (AMMOPortal* Exit = FindPortal(World, TEXT("MineExit")))
+				{
+					PlacePlayerNear(Exit->GetActorLocation(), 250.0f);
+				}
+			}
+			else if (State->bFlag)
+			{
+				AMMORustQueen* Queen = State->Queen.Get();
+				const bool bReset = StateOf(Queen) == EMMOCreatureAIState::Idle && Queen->GetHealth()->GetHealthPercent() >= 1.0f;
+				if (bReset)
+				{
+					Check(Queen->GetBrood().Num() == 0, TEXT("Leaving the fight resets the boss: brood gone, full health"));
+					State->bFlag = false;
+					NextStep();
+				}
+				else if (Elapsed() > 25.0f)
+				{
+					Check(false, TEXT("The boss reset after the player left"));
+					NextStep();
+				}
+			}
+			break;
+
+		case 59: // the real kill: enrage, death, loot, and the way out
+		{
+			AMMORustQueen* Queen = State->Queen.Get();
+			PlayerHealth->RestoreHealth(PlayerHealth->GetMaxHealth());
+			if (!State->bFlag)
+			{
+				State->bFlag = true;
+				PlacePlayerNear(Queen->GetActorLocation(), 380.0f);
+				State->Mark = Now();
+				break;
+			}
+			if (Queen->IsInCombat() && !Queen->IsEnraged() && !Queen->IsDead())
+			{
+				UMMOHealthComponent* QueenHealth = Queen->GetHealth();
+				QueenHealth->ApplyDamage(QueenHealth->GetCurrentHealth() - QueenHealth->GetMaxHealth() * 0.2f, Player);
+				State->Mark = Now();
+				break;
+			}
+			if (Queen->IsEnraged() && !Queen->IsDead() && Now() - State->Mark > 0.3)
+			{
+				Check(Queen->AttackCooldown < 2.0f && State->LastEmote.Contains(TEXT("enraged")), TEXT("Below 25% she enrages and attacks faster"));
+				UMMOLootTable::ForceNextDrop(UMMOItemDefinition::FindById(TEXT("MandibleCleaver")));
+				Queen->GetHealth()->ApplyDamage(1000000.0f, Player);
+				const bool bLoot = Queen->GetLoot()->GetItems().ContainsByPredicate([](const FMMOItemStack& S) { return S.Item && S.Item->ItemId == TEXT("MandibleCleaver"); });
+				Check(Queen->IsDead() && Queen->IsLootable() && bLoot, TEXT("Grindmaw dies and drops her loot"));
+				bool bBroodGone = true;
+				for (const TWeakObjectPtr<AMMOCreature>& Add : Queen->GetBrood())
+				{
+					bBroodGone &= !Add.IsValid() || Add->IsDead();
+				}
+				Check(bBroodGone, TEXT("Her brood dies with her"));
+
+				AMMOPortal* Exit = FindPortal(World, TEXT("MineExit"));
+				PlacePlayerNear(Exit->GetActorLocation(), 220.0f);
+				PlayerHealth->ApplyDamage(1.0f, Queen); // a last hit from the fight
+				Check(Player->IsInCombat() && !Player->TryInteract(Exit), TEXT("The exit can't be used mid-fight"));
+				State->bFlag = false;
+				NextStep();
+			}
+			else if (Now() - State->Mark > 12.0)
+			{
+				Check(false, TEXT("The boss fight reached the enrage phase"));
+				NextStep();
+			}
+			break;
+		}
+
+		case 60: // out of combat: leave the mine (also the entry point for maps without a dungeon)
+			if (!State->Queen.IsValid())
+			{
+				NextStep();
+				break;
+			}
+			if (Elapsed() > 7.0f)
+			{
+				AMMOPortal* Exit = FindPortal(World, TEXT("MineExit"));
+				PlacePlayerNear(Exit->GetActorLocation(), 220.0f);
+				Check(!Player->IsInCombat() && Player->TryInteract(Exit) && FVector::Dist(Player->GetActorLocation(), Exit->Destination) < 300.0f, TEXT("Out of combat, the exit leads back to daylight"));
+				NextStep();
+			}
+			break;
+
+		case 61: // save, scramble everything, load: the character comes back exactly as it was (Milestone 5)
 		{
 			UMMOSaveSubsystem* Saves = World->GetGameInstance()->GetSubsystem<UMMOSaveSubsystem>();
 			Check(Saves && !Saves->IsPersistenceEnabled(), TEXT("Autosave is off during the self-test (real progress is never overwritten)"));
@@ -1782,7 +2025,7 @@ namespace MMOSelfTest
 			{
 				State->Dire = *It;
 			}
-			else
+			else if (It->IsA<AMMOGreyWolf>())
 			{
 				Creatures.Add(*It);
 			}
@@ -1829,6 +2072,22 @@ namespace MMOSelfTest
 			if (State && Event == EMMOCombatEvent::Damage && WeakPlayer.IsValid() && Component == WeakPlayer->GetHealth() && Amount < 1000.0f)
 			{
 				State->LastPlayerDamage = Amount;
+			}
+		});
+
+		State->DetonationHandle = AMMOTelegraph::OnAnyDetonation.AddLambda([WeakPlayer](const AMMOTelegraph* Telegraph, const TArray<AActor*>& Hit)
+		{
+			if (State)
+			{
+				++State->Detonations;
+				State->bLastDetonationHitPlayer = Hit.Contains(WeakPlayer.Get());
+			}
+		});
+		State->EmoteHandle = AMMORustQueen::OnBossEmote.AddLambda([](const AMMOCreature* Boss, const FText& Text)
+		{
+			if (State)
+			{
+				State->LastEmote += Text.ToString() + TEXT(" | ");
 			}
 		});
 

@@ -3,7 +3,7 @@
 // Development-only visual tour of the Thornwick zone:
 //   mmo.tour        teleports the player through the zone's key viewpoints, saving a screenshot at each
 //   mmo.tour quit   ...and exits when done (add viewpoint names, e.g. "mmo.tour Hollis Doran", to visit only those)
-//   mmo.goto <Name> teleports to one viewpoint (Village, Gate, Meadow, Tower, Stones, Woods, Camp, Den, Waterfall, Hollow, Mine, Overview, Hollis, Brenna, Doran, Pell, Copper, Herbs)
+//   mmo.goto <Name> teleports to one viewpoint (Village, Gate, Meadow, Tower, Stones, Woods, Camp, Den, Waterfall, Hollow, Mine, Overview, Hollis, Brenna, Doran, Pell, Copper, Herbs, MineHall, MineNest, MineThrone)
 // The player is invulnerable during the tour.
 
 #include "CoreMinimal.h"
@@ -27,6 +27,8 @@ namespace MMOZoneTour
 	{
 		const TCHAR* Name;
 		float X, Y, Yaw, Pitch, Zoom;
+		/** Absolute floor height (indoor viewpoints); terrain height is used when unset */
+		float FloorZ = -100000.0f;
 	};
 
 	static const FViewpoint Viewpoints[] =
@@ -50,6 +52,9 @@ namespace MMOZoneTour
 		{ TEXT("Doran"),      1180.0f,   178.0f,    11.0f,  -8.0f,  450.0f },
 		{ TEXT("Pell"),        389.0f,   -94.0f,   -46.0f,  -8.0f,  450.0f },
 		{ TEXT("Copper"),     7250.0f,  4150.0f,    45.0f, -14.0f,  420.0f },
+		{ TEXT("MineHall"),  30250.0f, -3000.0f,     0.0f, -10.0f,  500.0f, 0.0f },
+		{ TEXT("MineNest"),  30300.0f, -3000.0f,     0.0f,  -8.0f,  600.0f, 0.0f },
+		{ TEXT("MineThrone"), 35700.0f,   -100.0f,    0.0f, -10.0f,  700.0f, 0.0f },
 		{ TEXT("Herbs"),      4350.0f, -1250.0f,    50.0f, -18.0f,  380.0f },
 	};
 
@@ -76,7 +81,7 @@ namespace MMOZoneTour
 			return false;
 		}
 
-		const float Z = (Terrain ? Terrain->GetHeightAt(View.X, View.Y) : 0.0f) + 110.0f;
+		const float Z = (View.FloorZ > -90000.0f ? View.FloorZ : (Terrain ? Terrain->GetHeightAt(View.X, View.Y) : 0.0f)) + 110.0f;
 		Player->TeleportTo(FVector(View.X, View.Y, Z), FRotator(0.0f, View.Yaw, 0.0f), false, true);
 		if (AController* Controller = Player->GetController())
 		{

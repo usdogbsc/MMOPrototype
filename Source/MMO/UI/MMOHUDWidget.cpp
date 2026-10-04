@@ -11,6 +11,9 @@
 #include "UI/MMOAbilityWidgets.h"
 #include "UI/MMOCraftingWindowWidget.h"
 #include "World/MMOCraftingStation.h"
+#include "Creatures/MMOCreature.h"
+#include "Creatures/MMORustQueen.h"
+#include "EngineUtils.h"
 #include "Combat/MMOAbilityComponent.h"
 #include "Combat/MMOAbilityDefinition.h"
 #include "Components/ProgressBar.h"
@@ -143,6 +146,24 @@ void UMMOHUDWidget::BuildDefaultLayout()
 		Place(Root, CastBox, FAnchors(0.5f, 1.0f), FVector2D(0.5f, 1.0f), FVector2D(0.0f, -150.0f));
 	}
 
+	// boss frame: name, wide health bar and percentage
+	{
+		UVerticalBox* BossBox = WidgetTree->ConstructWidget<UVerticalBox>(UVerticalBox::StaticClass(), TEXT("BossFrame"));
+		BossNameText = MakeText(WidgetTree, TEXT(""), 16, FLinearColor(1.0f, 0.55f, 0.3f), true, ETextJustify::Center);
+		BossBox->AddChildToVerticalBox(BossNameText)->SetHorizontalAlignment(HAlign_Center);
+		USizeBox* BarSize = WidgetTree->ConstructWidget<USizeBox>(USizeBox::StaticClass());
+		BarSize->SetWidthOverride(440.0f);
+		BarSize->SetHeightOverride(18.0f);
+		BossHealthBar = MakeBar(WidgetTree, Colors::EnemyHealth, Colors::BarBack);
+		BarSize->AddChild(BossHealthBar);
+		BossBox->AddChildToVerticalBox(BarSize)->SetHorizontalAlignment(HAlign_Center);
+		BossHealthText = MakeText(WidgetTree, TEXT(""), 12, FLinearColor::White, true, ETextJustify::Center);
+		BossBox->AddChildToVerticalBox(BossHealthText)->SetHorizontalAlignment(HAlign_Center);
+		BossBox->SetVisibility(ESlateVisibility::Collapsed);
+		BossFrame = BossBox;
+		Place(Root, BossBox, FAnchors(0.5f, 0.0f), FVector2D(0.5f, 0.0f), FVector2D(0.0f, 24.0f));
+	}
+
 	StatusText = MakeText(WidgetTree, TEXT(""), 12, FLinearColor(0.55f, 0.9f, 0.45f), true);
 	Place(Root, StatusText, FAnchors(0.0f, 0.0f), FVector2D::ZeroVector, FVector2D(26.0f, 102.0f));
 
@@ -264,6 +285,7 @@ void UMMOHUDWidget::NativeConstruct()
 	}
 
 	CombatEventHandle = UMMOHealthComponent::OnAnyCombatEvent.AddUObject(this, &UMMOHUDWidget::HandleAnyCombatEvent);
+	BossEmoteHandle = AMMORustQueen::OnBossEmote.AddUObject(this, &UMMOHUDWidget::HandleBossEmote);
 
 	if (InventoryWindow)
 	{
@@ -302,6 +324,7 @@ void UMMOHUDWidget::NativeConstruct()
 void UMMOHUDWidget::NativeDestruct()
 {
 	UMMOHealthComponent::OnAnyCombatEvent.Remove(CombatEventHandle);
+	AMMORustQueen::OnBossEmote.Remove(BossEmoteHandle);
 	UnbindFromCharacter();
 
 	Super::NativeDestruct();
@@ -316,6 +339,7 @@ void UMMOHUDWidget::NativeTick(const FGeometry& MyGeometry, float InDeltaTime)
 
 	UpdateFrames(Character);
 	UpdateCastBar(Character);
+	UpdateBossFrame(Character, InDeltaTime);
 	UpdateFloatingTexts(InDeltaTime);
 	UpdateBanners(Character, InDeltaTime);
 	UpdateLootFeed(InDeltaTime);
@@ -517,6 +541,69 @@ void UMMOHUDWidget::UpdateCastBar(AMMOCharacter* Character)
 	{
 		CastBar->SetVisibility(ESlateVisibility::Collapsed);
 	}
+}
+
+void UMMOHUDWidget::UpdateBossFrame(AMMOCharacter* Character, float DeltaSeconds)
+{
+	if (!BossFrame || !Character)
+	{
+		return;
+	}
+
+	// bosses are rare: look for them once a second
+	BossScanTimer -= DeltaSeconds;
+	if (BossScanTimer <= 0.0f)
+	{
+		BossScanTimer = 1.0f;
+		KnownBosses.Reset();
+		for (TActorIterator<AMMOCreature> It(GetWorld()); It; ++It)
+		{
+			if (It->bIsBoss)
+			{
+				KnownBosses.Add(*It);
+			}
+		}
+	}
+
+	// shown while fighting a nearby boss (or while it is targeted)
+	AMMOCreature* Engaged = nullptr;
+	for (const TWeakObjectPtr<AMMOCreature>& Boss : KnownBosses)
+	{
+		if (Boss.IsValid() && !Boss->IsHidden() && FVector::Dist(Boss->GetActorLocation(), Character->GetActorLocation()) < 4500.0f
+			&& (Boss->IsInCombat() || Character->GetCombat()->GetCurrentTarget() == Boss.Get()))
+		{
+			Engaged = Boss.Get();
+			break;
+		}
+	}
+	ShownBoss = Engaged;
+	if (!Engaged)
+	{
+		BossFrame->SetVisibility(ESlateVisibility::Collapsed);
+		return;
+	}
+
+	const UMMOHealthComponent* BossHealth = Engaged->GetHealth();
+	BossNameText->SetText(FText::FromString(FString::Printf(TEXT("%s  (Level %d Boss)"), *Engaged->DisplayName.ToString(), Engaged->CreatureLevel)));
+	BossHealthBar->SetPercent(BossHealth->GetHealthPercent());
+	BossHealthText->SetText(FText::FromString(FString::Printf(TEXT("%d / %d  (%d%%)"), FMath::CeilToInt(BossHealth->GetCurrentHealth()), FMath::RoundToInt(BossHealth->GetMaxHealth()), FMath::RoundToInt(BossHealth->GetHealthPercent() * 100.0f))));
+	BossFrame->SetVisibility(ESlateVisibility::HitTestInvisible);
+}
+
+void UMMOHUDWidget::HandleBossEmote(const AMMOCreature* Boss, const FText& Text)
+{
+	const APawn* Pawn = GetOwningPlayerPawn();
+	if (!Boss || !Pawn || Boss->GetWorld() != GetWorld() || FVector::Dist(Boss->GetActorLocation(), Pawn->GetActorLocation()) > 6000.0f)
+	{
+		return;
+	}
+	if (QuestToastText)
+	{
+		QuestToastText->SetText(Text);
+		QuestToastText->SetFont(MMOUI::Font(20, true));
+		QuestToastText->SetColorAndOpacity(FSlateColor(FLinearColor(1.0f, 0.45f, 0.2f)));
+	}
+	QuestToastTime = 4.0f;
 }
 
 void UMMOHUDWidget::HandleAbilityLearned(UMMOAbilityDefinition* Ability)

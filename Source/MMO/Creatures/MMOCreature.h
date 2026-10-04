@@ -114,6 +114,14 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Creature|Rewards", meta=(ClampMin=0))
 	int32 XPReward = 40;
 
+	/** False for temporary creatures (summons): they are removed instead of respawning */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Creature|Respawn")
+	bool bRespawns = true;
+
+	/** Bosses get the big health frame at the top of the screen */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Creature")
+	bool bIsBoss = false;
+
 	/** Id that kill quests count (e.g. GreyWolf, DenWolf). Defaults to the creature type */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Creature|Rewards")
 	FName QuestTag;
@@ -313,6 +321,12 @@ public:
 	/** Bleeds for TotalDamage over Duration (ticks every 1.5s). A new bleed replaces the old one */
 	void ApplyBleed(float TotalDamage, float Duration, AActor* DamageInstigator);
 	bool IsBleeding() const { return BleedTicksLeft > 0; }
+
+	/** Called by the AI when the creature gives up a fight and is back home at full health */
+	virtual void NotifyCombatReset() {}
+
+	/** Called once when the creature dies (after XP / loot) */
+	virtual void NotifyDied() {}
 
 	/** Can't move or attack for Duration */
 	void ApplyStun(float Duration);

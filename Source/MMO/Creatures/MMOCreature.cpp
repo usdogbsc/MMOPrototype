@@ -473,6 +473,7 @@ void AMMOCreature::HandleDeath(AActor* Killer)
 	Loot->GenerateFrom(LoadedLootTable);
 
 	UE_LOG(LogMMO, Log, TEXT("%s died (killer: %s, XP reward: %d, loot stacks: %d, currency: %d)"), *GetName(), *GetNameSafe(Killer), XPReward, Loot->GetItems().Num(), Loot->GetCurrency());
+	NotifyDied();
 
 	ScheduleCorpseRemoval(Loot->HasLoot() ? LootableCorpseDuration : CorpseDuration);
 }
@@ -513,6 +514,12 @@ void AMMOCreature::HideCorpse()
 	SetActorEnableCollision(false);
 	TargetIndicator->SetHiddenInGame(true, true);
 	LootMarker->SetHiddenInGame(true);
+
+	if (!bRespawns)
+	{
+		Destroy();
+		return;
+	}
 
 	const float SinceDeath = static_cast<float>(GetWorld()->GetTimeSeconds() - DeathTime);
 	const float Delay = FMath::Max(MinRespawnAfterCorpse, RespawnDelay - SinceDeath);

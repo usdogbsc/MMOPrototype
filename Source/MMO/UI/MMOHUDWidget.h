@@ -21,6 +21,7 @@ class UMMOLootWindowWidget;
 class UMMOLootContainerComponent;
 class UMMOItemDefinition;
 class AMMODiscoveryZone;
+class AMMOCreature;
 class AMMONPC;
 class UMMODialogueWindowWidget;
 class UMMOQuestLogWindowWidget;
@@ -86,6 +87,12 @@ public:
 	void SetAbilitiesOpen(bool bOpen);
 	bool IsAbilitiesOpen() const;
 	UMMOAbilitiesWindowWidget* GetAbilitiesWindow() const { return AbilitiesWindow; }
+
+	/** Updates the boss frame now (normally every frame) */
+	void UpdateBossFrame(AMMOCharacter* Character, float DeltaSeconds);
+
+	/** Boss currently shown in the boss frame (null if hidden) */
+	AMMOCreature* GetShownBoss() const { return ShownBoss.Get(); }
 
 	/** True while the cast bar is showing */
 	bool IsCastBarVisible() const;
@@ -193,6 +200,24 @@ protected:
 
 	UPROPERTY(BlueprintReadOnly, Category="HUD", meta=(BindWidgetOptional))
 	TObjectPtr<UTextBlock> CastBarText;
+
+	/** Big boss health bar, top-center */
+	UPROPERTY(BlueprintReadOnly, Category="HUD", meta=(BindWidgetOptional))
+	TObjectPtr<UWidget> BossFrame;
+
+	UPROPERTY(BlueprintReadOnly, Category="HUD", meta=(BindWidgetOptional))
+	TObjectPtr<UTextBlock> BossNameText;
+
+	UPROPERTY(BlueprintReadOnly, Category="HUD", meta=(BindWidgetOptional))
+	TObjectPtr<UProgressBar> BossHealthBar;
+
+	UPROPERTY(BlueprintReadOnly, Category="HUD", meta=(BindWidgetOptional))
+	TObjectPtr<UTextBlock> BossHealthText;
+
+	TWeakObjectPtr<AMMOCreature> ShownBoss;
+	TArray<TWeakObjectPtr<AMMOCreature>> KnownBosses;
+	float BossScanTimer = 0.0f;
+	FDelegateHandle BossEmoteHandle;
 
 	/** Row holding Basic Attack and the item/ability buttons */
 	UPROPERTY(BlueprintReadOnly, Category="HUD", meta=(BindWidgetOptional))
@@ -304,6 +329,7 @@ protected:
 	void HandleAbilityLearned(UMMOAbilityDefinition* Ability);
 
 	void UpdateCastBar(AMMOCharacter* Character);
+	void HandleBossEmote(const AMMOCreature* Boss, const FText& Text);
 
 	UFUNCTION()
 	void HandleQuestLogChanged();

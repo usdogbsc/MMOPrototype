@@ -36,6 +36,11 @@ MAT_DIR = "/Game/MMO/World/Materials"
 AUDIO_DIR = "/Game/MMO/Audio/Ambient"
 
 
+def rgba(r, g, b, a=255):
+    """unreal.Color's positional order is the struct's (B, G, R, A): always build colors by name."""
+    return unreal.Color(r=r, g=g, b=b, a=a)
+
+
 def log(message):
     LOG.append(str(message))
     unreal.log("[MMO zone] " + str(message))
@@ -78,7 +83,8 @@ PALETTE = {
 ROUGHNESS = {"water": 0.05, "metal": 0.8, "foam": 0.6, "void": 1.0}
 # scene luminance in daylight is ~0.5 nit (EV100 ~0.6), so emissives stay gentle
 GLOW = {"glow_window": ((1.0, 0.62, 0.25), 0.9), "glow_ember": ((1.0, 0.22, 0.02), 5.0), "glow_lantern": ((1.0, 0.7, 0.3), 2.5),
-        "glow_water": ((0.06, 0.32, 0.55), 0.45), "glow_foam": ((0.8, 0.9, 1.0), 0.6)}
+        "glow_water": ((0.06, 0.32, 0.55), 0.45), "glow_foam": ((0.8, 0.9, 1.0), 0.6),
+        "glow_danger": ((1.0, 0.1, 0.02), 4.0), "glow_rust": ((1.0, 0.3, 0.05), 1.2)}
 
 MATS = {}
 
@@ -421,7 +427,7 @@ def lamp_post(x, y, folder="Village/Lamps"):
     part(CUBE, (x, y, z + 318), (40, 40, 8), "metal", folder=folder, collide=False)
     light = ACTORS.spawn_actor_from_class(unreal.PointLight, unreal.Vector(x, y, z + 290))
     light.get_component_by_class(unreal.PointLightComponent).set_editor_property("intensity", 18.0)
-    light.get_component_by_class(unreal.PointLightComponent).set_editor_property("light_color", unreal.Color(255, 180, 110, 255))
+    light.get_component_by_class(unreal.PointLightComponent).set_editor_property("light_color", rgba(255, 180, 110, 255))
     light.get_component_by_class(unreal.PointLightComponent).set_editor_property("attenuation_radius", 700.0)
     light.get_component_by_class(unreal.PointLightComponent).set_editor_property("cast_shadows", False)
     light.set_folder_path(folder)
@@ -506,7 +512,7 @@ def build_atmosphere():
     sun.set_actor_label("Sun")
     c = sun.get_component_by_class(unreal.DirectionalLightComponent)
     c.set_editor_property("intensity", 7.5)
-    c.set_editor_property("light_color", unreal.Color(255, 234, 205, 255))
+    c.set_editor_property("light_color", rgba(255, 234, 205, 255))
     c.set_editor_property("atmosphere_sun_light", True)
     c.set_editor_property("mobility", unreal.ComponentMobility.MOVABLE)
 
@@ -603,7 +609,7 @@ def build_village():
         forge.put(CUBE, -60, 280 + i * 30, 130, (6, 6, 150), "metal", pitch=0, roll=8, folder=fold, collide=False)
     ember = ACTORS.spawn_actor_from_class(unreal.PointLight, unreal.Vector(*forge.at(-150, -150, 180)))
     ember.get_component_by_class(unreal.PointLightComponent).set_editor_property("intensity", 40.0)
-    ember.get_component_by_class(unreal.PointLightComponent).set_editor_property("light_color", unreal.Color(255, 110, 40, 255))
+    ember.get_component_by_class(unreal.PointLightComponent).set_editor_property("light_color", rgba(255, 110, 40, 255))
     ember.get_component_by_class(unreal.PointLightComponent).set_editor_property("attenuation_radius", 900.0)
     ember.set_folder_path(fold)
 
@@ -860,7 +866,7 @@ def build_landmarks():
         rock(*m.at(lx, ly, 0)[:2], (rng.uniform(90, 200), rng.uniform(80, 160), rng.uniform(60, 140)), "rock_dark", fold, rng=rng)
     light = ACTORS.spawn_actor_from_class(unreal.PointLight, unreal.Vector(*m.at(120, 380, 240)))
     light.get_component_by_class(unreal.PointLightComponent).set_editor_property("intensity", 25.0)
-    light.get_component_by_class(unreal.PointLightComponent).set_editor_property("light_color", unreal.Color(255, 170, 90, 255))
+    light.get_component_by_class(unreal.PointLightComponent).set_editor_property("light_color", rgba(255, 170, 90, 255))
     light.get_component_by_class(unreal.PointLightComponent).set_editor_property("attenuation_radius", 800.0)
     light.set_folder_path(fold)
     log("Landmarks built")
@@ -1063,7 +1069,7 @@ NPCS = [
          tints=[(0.12, 0.2, 0.08), (0.28, 0.14, 0.3)],
          greeting="Feverfew, thornleaf, a pinch of wolfsbane... not for drinking, that one. Looking for something to keep you on your feet out there?",
          quests=["ThornleafHarvest"], stock=["MinorHealingPotion", "EmptyVial"], hat=(CONE, "cloth_green", (0, 0, 98), (0.3, 0.3, 0.3))),
-    dict(id="Pell", name="Old Pell", title="Retired Miner", at=(700, -420), look=(300, 0),
+    dict(id="Pell", name="Old Pell", title="Retired Miner", at=(700, -420), look=(300, 0), quests_m9=["IntoTheRustvein", "TheRustQueen"],
          tints=[(0.12, 0.09, 0.06), (0.1, 0.13, 0.22)],
          greeting="Forty years I swung a pick in the Rustvein, east past the Greywood. They boarded it up after the deep tunnels went "
                   "quiet... and then started making noises. Don't you go poking about in there. Not yet, anyway.",
@@ -1096,7 +1102,7 @@ def build_npcs():
         actor.set_editor_property("display_name", spec["name"])
         actor.set_editor_property("title", spec["title"])
         actor.set_editor_property("greeting", spec["greeting"])
-        actor.set_editor_property("quests", [q for q in (quest(qid) for qid in spec["quests"]) if q])
+        actor.set_editor_property("quests", [q for q in (quest(qid) for qid in spec["quests"] + spec.get("quests_m9", [])) if q])
         stock = []
         for item_id in spec.get("stock", []):
             item = unreal.load_asset("/Game/MMO/Items/DA_Item_" + item_id)
@@ -1208,10 +1214,210 @@ def build_crafting():
     light.set_folder_path(fold)
     component = light.get_component_by_class(unreal.PointLightComponent)
     component.set_editor_property("intensity", 22.0)
-    component.set_editor_property("light_color", unreal.Color(255, 140, 60, 255))
+    component.set_editor_property("light_color", rgba(255, 140, 60, 255))
     component.set_editor_property("attenuation_radius", 450.0)
     component.set_editor_property("cast_shadows", False)
     log("Gathering nodes: %d copper, %d thornleaf, %d duskroot; 3 crafting stations" % (len(COPPER_VEINS), len(THORNLEAF), len(DUSKROOT)))
+
+
+# =====================================================================================================================
+# Rustvein Mine interior (Milestone 9): an enclosed cave complex east of the terrain, reached through the entrance portal
+# =====================================================================================================================
+
+MINE_ORIGIN = (30000, -3000, 0)
+MINE_ROOMS = {  # name: (x0, x1, y0, y1, ceiling)
+    "Hall": (0, 1400, -600, 600, 640),
+    "Tunnel1": (1400, 2600, -250, 250, 640),
+    "Nest": (2600, 4200, -900, 900, 640),
+    "Tunnel2": (3200, 3700, 900, 2200, 640),
+    "Burrow": (2700, 4300, 2200, 3600, 640),
+    "Tunnel3": (4300, 5400, 2650, 3150, 640),
+    "Throne": (5400, 7800, 1700, 4100, 900),
+}
+MINE_WALLS = [  # (x0, y0, x1, y1, height)
+    (0, -600, 0, 600, 640), (0, 600, 1400, 600, 640), (0, -600, 1400, -600, 640),
+    (1400, -600, 1400, -250, 640), (1400, 250, 1400, 600, 640),
+    (1400, -250, 2600, -250, 640), (1400, 250, 2600, 250, 640),
+    (2600, -900, 2600, -250, 640), (2600, 250, 2600, 900, 640), (4200, -900, 4200, 900, 640), (2600, -900, 4200, -900, 640),
+    (2600, 900, 3200, 900, 640), (3700, 900, 4200, 900, 640),
+    (3200, 900, 3200, 2200, 640), (3700, 900, 3700, 2200, 640),
+    (2700, 2200, 3200, 2200, 640), (3700, 2200, 4300, 2200, 640), (2700, 3600, 4300, 3600, 640), (2700, 2200, 2700, 3600, 640),
+    (4300, 2200, 4300, 2650, 640), (4300, 3150, 4300, 3600, 640),
+    (4300, 2650, 5400, 2650, 640), (4300, 3150, 5400, 3150, 640),
+    (5400, 1700, 5400, 2650, 900), (5400, 3150, 5400, 4100, 900), (7800, 1700, 7800, 4100, 900),
+    (5400, 1700, 7800, 1700, 900), (5400, 4100, 7800, 4100, 900),
+]
+MINE_LINTELS = [(5400, 2650, 5400, 3150, 640, 900)]  # wall above a doorway: (x0, y0, x1, y1, bottom, top)
+MINE_LIGHTS = [(500, -400), (500, 400), (1150, 0), (2000, 0), (2900, -600), (3900, 600), (3400, 0), (3450, 1550),
+               (2950, 2500), (4050, 3350), (3500, 2900), (4850, 2900), (5800, 2000), (7400, 2000), (5800, 3800), (7400, 3800)]
+MINE_BEETLES = [(2950, -450), (3500, 350), (3950, -550), (3300, 650), (3050, 2750), (3850, 3300), (3550, 2950)]
+MINE_BOSS = (6750, 2900)
+MINE_ORE = [(4000, 750), (2850, 3420), (2850, -780)]
+
+
+def mine_at(x, y, z=0):
+    return (MINE_ORIGIN[0] + x, MINE_ORIGIN[1] + y, MINE_ORIGIN[2] + z)
+
+
+def mine_light(x, y, z, intensity=100.0, radius=1100.0, color=(255, 160, 80)):
+    light = ACTORS.spawn_actor_from_class(unreal.PointLight, unreal.Vector(*mine_at(x, y, z)))
+    component = light.get_component_by_class(unreal.PointLightComponent)
+    component.set_editor_property("intensity", intensity)
+    component.set_editor_property("light_color", rgba(color[0], color[1], color[2], 255))
+    component.set_editor_property("attenuation_radius", radius)
+    component.set_editor_property("cast_shadows", False)
+    light.set_folder_path("RustveinMine/Lights")
+
+
+def build_mine():
+    rng = random.Random(909)
+    fold = "RustveinMine/Rock"
+    for name, (x0, x1, y0, y1, ceiling) in MINE_ROOMS.items():
+        cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
+        w, d = x1 - x0, y1 - y0
+        # thick shell: thin walls let the sky light leak in through Lumen's distance fields
+        part(CUBE, mine_at(cx, cy, -100), (w + 300, d + 300, 200), "gravel", folder=fold, label="Mine_Floor_" + name)
+        part(CUBE, mine_at(cx, cy, ceiling + 150), (w + 300, d + 300, 300), "rock_dark", folder=fold, label="Mine_Ceiling_" + name)
+    for (x0, y0, x1, y1, h) in MINE_WALLS:
+        length = math.hypot(x1 - x0, y1 - y0)
+        yaw = math.degrees(math.atan2(y1 - y0, x1 - x0))
+        part(CUBE, mine_at((x0 + x1) / 2, (y0 + y1) / 2, h / 2), (length + 160, 160, h + 40), "rock_dark", rot=(0, yaw, 0), folder=fold)
+    for (x0, y0, x1, y1, bottom, top) in MINE_LINTELS:
+        length = math.hypot(x1 - x0, y1 - y0)
+        yaw = math.degrees(math.atan2(y1 - y0, x1 - x0))
+        part(CUBE, mine_at((x0 + x1) / 2, (y0 + y1) / 2, (bottom + top) / 2), (length + 160, 160, top - bottom + 40), "rock_dark", rot=(0, yaw, 0), folder=fold)
+        # lumpy rock along the walls so rooms read as caves, not boxes
+        for k in range(int(length / 260)):
+            t = (k + 0.5) / max(1, int(length / 260))
+            px, py = x0 + (x1 - x0) * t, y0 + (y1 - y0) * t
+            size = rng.uniform(140, 260)
+            part(SPHERE, mine_at(px, py, rng.uniform(40, h * 0.6)), (size, size * rng.uniform(0.7, 1.1), size * rng.uniform(0.8, 1.4)),
+                 rng.choice(["rock_dark", "rock", "rust"]), folder=fold, collide=False)
+
+    # timber supports along the tunnels and a rail line through the first rooms
+    fold = "RustveinMine/Props"
+    for x in range(1500, 2600, 300):
+        for y in (-215, 215):
+            part(CUBE, mine_at(x, y, 220), (24, 24, 440), "timber", folder=fold)
+        part(CUBE, mine_at(x, 0, 440), (24, 460, 24), "timber", folder=fold)
+    for y in range(1000, 2200, 300):
+        for x in (3235, 3665):
+            part(CUBE, mine_at(x, y, 220), (24, 24, 440), "timber", folder=fold)
+        part(CUBE, mine_at(3450, y, 440), (460, 24, 24), "timber", folder=fold)
+    for x in range(100, 3000, 90):
+        for y in (-70, 70):
+            part(CUBE, mine_at(x, y, 4), (90, 8, 8), "rust", folder=fold, collide=False)
+        part(CUBE, mine_at(x, 0, 2), (14, 200, 5), "planks", folder=fold, collide=False)
+    for (x, y, yaw) in [(900, 0, 0), (3600, -300, 25)]:
+        f = Frame(*mine_at(x, y)[:2], yaw, z=MINE_ORIGIN[2])
+        f.put(CUBE, 0, 0, 70, (180, 110, 80), "rust", folder=fold)
+        f.put(SPHERE, 0, 0, 115, (120, 80, 50), "rock_dark", folder=fold, collide=False)
+        for lx in (-60, 60):
+            for ly in (-60, 60):
+                f.put(CYL, lx, ly, 22, (40, 40, 10), "metal", roll=90, folder=fold, collide=False)
+    for (x, y) in [(300, -480), (380, -470), (300, 470), (1250, 480), (1180, -500)]:
+        part(CUBE, mine_at(x, y, 40), (80, 80, 80), "planks", rot=(0, rng.uniform(0, 90), 0), folder=fold)
+
+    # glowing rust seeps and ember crystals
+    fold = "RustveinMine/Glow"
+    for (x, y, r) in [(3200, -200, 160), (3900, 300, 120), (3300, 3000, 180), (6000, 2400, 220), (7300, 3500, 200), (6600, 3700, 160)]:
+        part(CYL, mine_at(x, y, 2), (r * 2, r * 2, 4), "glow_rust", folder=fold, collide=False, shadow=False)
+    for k in range(18):
+        room = rng.choice(["Nest", "Burrow", "Throne", "Throne"])
+        x0, x1, y0, y1, _ = MINE_ROOMS[room]
+        x, y = rng.uniform(x0 + 120, x1 - 120), rng.choice([y0 + 70, y1 - 70])
+        part(CONE, mine_at(x, y, 40), (40, 40, rng.uniform(80, 150)), "glow_ember", rot=(rng.uniform(-20, 20), 0, rng.uniform(-20, 20)), folder=fold, collide=False, shadow=False)
+
+    # the queen's throne room: pillars, bones and a glowing pit
+    fold = "RustveinMine/Throne"
+    for (x, y) in [(5900, 2200), (7300, 2200), (5900, 3600), (7300, 3600)]:
+        part(CYL, mine_at(x, y, 450), (220, 220, 900), "rock_dark", folder=fold)
+        part(CYL, mine_at(x, y, 60), (300, 300, 120), "rust", folder=fold)
+    for k in range(10):
+        x, y = rng.uniform(5700, 7500), rng.uniform(1900, 3900)
+        if math.hypot(x - MINE_BOSS[0], y - MINE_BOSS[1]) > 500:
+            part(CYL, mine_at(x, y, 10), (16, 16, rng.uniform(60, 120)), "bone", rot=(90, rng.uniform(0, 180), 0), folder=fold, collide=False)
+
+    # lights: lanterns on posts, plus the queen's red glow
+    for (x, y) in MINE_LIGHTS:
+        part(CUBE, mine_at(x, y, 230), (26, 26, 30), "glow_lantern", folder="RustveinMine/Lights", collide=False, shadow=False)
+        mine_light(x, y, 260)
+    mine_light(MINE_BOSS[0], MINE_BOSS[1], 500, intensity=260.0, radius=2400.0, color=(255, 80, 40))
+
+    # inhabitants
+    for i, (x, y) in enumerate(MINE_BEETLES):
+        actor = ACTORS.spawn_actor_from_class(unreal.MMORustback, unreal.Vector(*mine_at(x, y, 45)), unreal.Rotator(0, 0, rng.uniform(0, 360)))
+        actor.set_actor_label("Rustback_%d" % i)
+        actor.set_folder_path("RustveinMine/Creatures")
+    boss = ACTORS.spawn_actor_from_class(unreal.MMORustQueen, unreal.Vector(*mine_at(MINE_BOSS[0], MINE_BOSS[1], 100)), unreal.Rotator(0, 0, 180))
+    boss.set_actor_label("Boss_Grindmaw")
+    boss.set_folder_path("RustveinMine/Creatures")
+    for i, (x, y) in enumerate(MINE_ORE):
+        node = gather_node(*mine_at(x, y)[:2], 50 + i, unreal.MMOProfession.MINING, "Copper Vein", 1, "CopperOre",
+                           (0.075, 0.07, 0.065), (0.8, 0.34, 0.08), 0.9, 0, "Node_MineCopper", "RustveinMine/Ore")
+        node.set_actor_location(unreal.Vector(*mine_at(x, y, 18)), False, False)
+
+    # portals: the boarded entrance outside <-> the hall inside
+    outside = (21590, -1800, ground(21590, -1800))
+    portal_out = ACTORS.spawn_actor_from_class(unreal.MMOPortal, unreal.Vector(*outside), unreal.Rotator(0, 0, 180))
+    portal_out.set_actor_label("Portal_MineEntrance")
+    portal_out.set_folder_path("Landmarks/RustveinMine")
+    portal_out.set_editor_property("portal_id", "MineEntrance")
+    portal_out.set_editor_property("display_name", "Rustvein Mine")
+    portal_out.set_editor_property("action_text", "Enter")
+    portal_out.set_editor_property("destination", unreal.Vector(*mine_at(350, 0, 110)))
+    portal_out.set_editor_property("destination_yaw", 0.0)
+    portal_in = ACTORS.spawn_actor_from_class(unreal.MMOPortal, unreal.Vector(*mine_at(110, 0, 0)), unreal.Rotator(0, 0, 0))
+    portal_in.set_actor_label("Portal_MineExit")
+    portal_in.set_folder_path("RustveinMine")
+    portal_in.set_editor_property("portal_id", "MineExit")
+    portal_in.set_editor_property("display_name", "Daylight")
+    portal_in.set_editor_property("action_text", "Leave the mine")
+    portal_in.set_editor_property("destination", unreal.Vector(21250, -1800, ground(21250, -1800) + 110))
+    portal_in.set_editor_property("destination_yaw", 180.0)
+    portal_in.set_editor_property("plate_height", 230.0)
+    # a bright doorway at the hall's west wall
+    part(CUBE, mine_at(92, 0, 200), (10, 300, 380), "glow_foam", folder="RustveinMine/Props", collide=False, shadow=False)
+
+    zone = ACTORS.spawn_actor_from_class(unreal.MMODiscoveryZone, unreal.Vector(*mine_at(3900, 1750, 300)))
+    zone.set_actor_label("Zone_RustveinDepths")
+    zone.set_folder_path("Zones")
+    zone.set_editor_property("location_id", "RustveinDepths")
+    zone.set_editor_property("location_name", "Rustvein Depths")
+    zone.set_editor_property("subtitle", "Level 4-6  -  Dungeon")
+    zone.set_editor_property("discovery_xp", 80)
+    zone.set_editor_property("priority", 5)
+    zone.set_editor_property("ambient_loop", sound("S_MMO_Amb_Mine"))
+    zone.set_editor_property("ambient_volume", 0.7)
+    zone.set_extent(unreal.Vector(4100, 2700, 1200))
+
+    # underground look: almost no sky light, warm lantern grading, exposure that doesn't brighten the dark into daylight
+    post = ACTORS.spawn_actor_from_class(unreal.PostProcessVolume, unreal.Vector(*mine_at(3900, 1750, 400)))
+    post.set_actor_label("PostProcess_Mine")
+    post.set_folder_path("RustveinMine")
+    post.set_actor_scale3d(unreal.Vector(44.0, 32.0, 8.0))
+    post.set_editor_property("priority", 1.0)
+    settings = post.settings
+    for key, value in [("override_indirect_lighting_intensity", True), ("indirect_lighting_intensity", 0.12),
+                       ("override_white_temp", True), ("white_temp", 4800.0),
+                       ("override_color_saturation", True), ("color_saturation", unreal.Vector4(1.15, 1.05, 0.95, 1.0)),
+                       # pin exposure near daylight levels: the cave stays dark and the lanterns carry it
+                       # (a low minimum would let the camera brighten the gloom back up to daylight)
+                       ("override_auto_exposure_min_brightness", True), ("auto_exposure_min_brightness", -0.6),
+                       ("override_auto_exposure_max_brightness", True), ("auto_exposure_max_brightness", -0.6),
+                       ("override_auto_exposure_bias", True), ("auto_exposure_bias", 0.0),
+                       ("override_scene_color_tint", True), ("scene_color_tint", unreal.LinearColor(1.0, 0.93, 0.84, 1.0)),
+                       ("override_vignette_intensity", True), ("vignette_intensity", 0.5)]:
+        try:
+            settings.set_editor_property(key, value)
+        except Exception as error:
+            log("Mine post setting %s skipped: %s" % (key, error))
+    post.set_editor_property("settings", settings)
+
+    nav = ACTORS.spawn_actor_from_class(unreal.NavMeshBoundsVolume, unreal.Vector(*mine_at(3900, 1750, 300)))
+    nav.set_actor_label("NavMeshBounds_Mine")
+    nav.set_actor_scale3d(unreal.Vector(42.0, 30.0, 8.0))
+    log("Rustvein Mine interior: %d rooms, %d beetles, boss, %d ore veins, 2 portals" % (len(MINE_ROOMS), len(MINE_BEETLES), len(MINE_ORE)))
 
 
 ZONES = [
@@ -1274,6 +1480,7 @@ def main():
     build_creatures()
     build_npcs()
     build_crafting()
+    build_mine()
     build_zones()
     build_navigation_and_start()
 
