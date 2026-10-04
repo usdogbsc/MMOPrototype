@@ -99,6 +99,17 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Creature|AI", meta=(ClampMin=0, Units="cm/s"))
 	float ReturnSpeed = 700.0f;
 
+	/** Idle wandering: how far from its spawn point the creature roams (0 = stands still) */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Creature|AI|Wander", meta=(ClampMin=0, Units="cm"))
+	float WanderRadius = 550.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Creature|AI|Wander", meta=(ClampMin=0, Units="cm/s"))
+	float WanderSpeed = 160.0f;
+
+	/** Seconds to pause (sniffing around) between wander moves */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Creature|AI|Wander")
+	FVector2D WanderPause = FVector2D(3.0f, 8.0f);
+
 	/** XP granted to the killer */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Creature|Rewards", meta=(ClampMin=0))
 	int32 XPReward = 40;
@@ -121,6 +132,14 @@ public:
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Creature|Respawn", meta=(ClampMin=0, Units="s"))
 	float MinRespawnAfterCorpse = 2.0f;
+
+	/** Respawn is postponed while the player stands this close to the spawn point */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Creature|Respawn", meta=(ClampMin=0, Units="cm"))
+	float MinRespawnPlayerDistance = 1200.0f;
+
+	/** Give up waiting for the player to leave after this long */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Creature|Respawn", meta=(ClampMin=0, Units="s"))
+	float MaxRespawnDeferral = 45.0f;
 
 	/** Skeletal path: attack montage. Needs an MMO Melee Hit notify on the bite frame */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Creature|Animation")
@@ -205,6 +224,7 @@ protected:
 
 	/** World times for the corpse lifecycle */
 	double DeathTime = 0.0;
+	double RespawnDueTime = 0.0;
 	double CorpseRemoveTime = 0.0;
 
 	/** Where the creature spawned and returns to */
@@ -280,6 +300,9 @@ public:
 
 	const FTransform& GetSpawnTransform() const { return SpawnTransform; }
 
+	/** World time the pending respawn is (or was) due */
+	double GetRespawnDueTime() const { return RespawnDueTime; }
+
 	UMMOHealthComponent* GetHealth() const { return Health; }
 
 protected:
@@ -312,6 +335,9 @@ protected:
 	void UpdateLootMarker();
 
 	void Respawn();
+
+	/** True if the player is close enough that popping into existence would look wrong */
+	bool IsPlayerNearSpawn() const;
 
 	void UpdateProceduralAnimation(float DeltaSeconds);
 

@@ -10,6 +10,7 @@
 #if !UE_BUILD_SHIPPING
 
 #include "Containers/Ticker.h"
+#include "Components/CapsuleComponent.h"
 #include "EngineUtils.h"
 #include "HAL/IConsoleManager.h"
 #include "Kismet/GameplayStatics.h"
@@ -34,6 +35,10 @@
 #include "UI/MMOHUD.h"
 #include "UI/MMOHUDWidget.h"
 #include "UI/MMOItemTooltipWidget.h"
+#include "Creatures/MMODireWolf.h"
+#include "Creatures/MMOGreyWolf.h"
+#include "World/MMODiscoveryZone.h"
+#include "World/MMOExplorationComponent.h"
 #include "Blueprint/UserWidget.h"
 #include "MMO.h"
 
@@ -59,6 +64,13 @@ namespace MMOSelfTest
 		int32 CounterMark = 0;
 		int32 HitCount = 0;
 		bool bFlag = false;
+		TWeakObjectPtr<AMMOCreature> Dire;
+		int32 XPMark = 0;
+		int32 LevelMark = 0;
+		double DeathMark = 0.0;
+		float MaxWanderDistance = 0.0f;
+		bool bHasZones = false;
+		float SavedLootChance = 1.0f;
 		float LastPlayerDamage = 0.0f;
 		float MinTargetHit = TNumericLimits<float>::Max();
 		int32 FillerAdded = 0;
@@ -167,6 +179,29 @@ namespace MMOSelfTest
 		return Inventory->GetSlots().IndexOfByPredicate([Item](const FMMOItemStack& Stack) { return !Stack.IsEmpty() && Stack.Item == Item; });
 	}
 
+	/** Total XP earned so far (all levels), so checks stay valid when discoveries also award XP */
+	static int32 TotalXP(const UMMOProgressionComponent* Progression)
+	{
+		int32 Total = Progression->GetCurrentXP();
+		for (int32 Level = 1; Level < Progression->GetLevel(); ++Level)
+		{
+			Total += Progression->GetXPRequiredForLevel(Level);
+		}
+		return Total;
+	}
+
+	static AMMODiscoveryZone* FindZone(UWorld* World, FName Id)
+	{
+		for (TActorIterator<AMMODiscoveryZone> It(World); It; ++It)
+		{
+			if (It->LocationId == Id)
+			{
+				return *It;
+			}
+		}
+		return nullptr;
+	}
+
 	static int32 CountOwned(const AMMOCharacter* Player)
 	{
 		return Player->GetInventory()->GetTotalItemCount() + Player->GetEquipment()->GetEquippedCount();
@@ -178,6 +213,10 @@ namespace MMOSelfTest
 			State->Passes, State->Failures, State->Failures == 0 ? TEXT("SUCCESS") : TEXT("FAILURE"));
 
 		UMMOHealthComponent::OnAnyCombatEvent.Remove(State->CombatEventHandle);
+		if (IConsoleVariable* LootChance = IConsoleManager::Get().FindConsoleVariable(TEXT("mmo.Loot.ChanceMultiplier")))
+		{
+			LootChance->Set(State->SavedLootChance);
+		}
 		FTSTicker::GetCoreTicker().RemoveTicker(State->Ticker);
 		const bool bQuit = State->bQuitWhenDone;
 		State.Reset();
@@ -205,6 +244,11 @@ namespace MMOSelfTest
 		}
 
 		UWorld* World = State->World.Get();
+		if (State->Pack.Num() > 0 && State->Pack[0].IsValid() && StateOf(State->Pack[0].Get()) == EMMOCreatureAIState::Idle)
+		{
+			const AMMOCreature* A = State->Pack[0].Get();
+			State->MaxWanderDistance = FMath::Max(State->MaxWanderDistance, static_cast<float>(FVector::Dist2D(A->GetActorLocation(), A->GetSpawnTransform().GetLocation())));
+		}
 		UMMOHealthComponent* PlayerHealth = Player->GetHealth();
 		UMMOCombatComponent* Combat = Player->GetCombat();
 		UMMOProgressionComponent* Progression = Player->GetProgression();
@@ -231,6 +275,27 @@ namespace MMOSelfTest
 			Check(Progression->GetLevel() == 1, TEXT("Player starts at level 1"));
 			Check(FMath::IsNearlyEqual(PlayerHealth->GetCurrentHealth(), 100.0f) && FMath::IsNearlyEqual(PlayerHealth->GetMaxHealth(), 100.0f), TEXT("Player starts at 100/100 health"));
 			Check(Progression->GetCurrentXP() == 0 && Progression->GetXPToNextLevel() == 100, TEXT("Player starts at 0/100 XP"));
+
+			if (AMMOCreature* Dire = State->Dire.Get())
+			{
+				Check(Dire->GetTargetDisplayName().ToString() == TEXT("Dire Wolf"), TEXT("A Dire Wolf exists in the zone"));
+				Check(Dire->GetTargetLevel() > Wolf->GetTargetLevel() && Dire->GetHealth()->GetMaxHealth() > 2.0f * Wolf->GetHealth()->GetMaxHealth()
+					&& Dire->AttackDamage > Wolf->AttackDamage && Dire->XPReward > 2 * Wolf->XPReward,
+					FString::Printf(TEXT("Dire Wolf is stronger: level %d, %.0f HP, %.0f damage, %d XP"), Dire->GetTargetLevel(), Dire->GetHealth()->GetMaxHealth(), Dire->AttackDamage, Dire->XPReward));
+				Check(Dire->GetCapsuleComponent()->GetScaledCapsuleRadius() > Wolf->GetCapsuleComponent()->GetScaledCapsuleRadius() * 1.2f, TEXT("Dire Wolf is visibly bigger"));
+				Check(Dire->LootTable.ToSoftObjectPath() != Wolf->LootTable.ToSoftObjectPath() && Dire->LootTable.LoadSynchronous() != nullptr, TEXT("Dire Wolf uses its own loot table"));
+				const UNavigationPath* DirePath = NavSys ? NavSys->FindPathToLocationSynchronously(World, State->SafeOrigin, Dire->GetSpawnTransform().GetLocation()) : nullptr;
+				Check(DirePath && DirePath->IsValid() && !DirePath->IsPartial(), TEXT("NavMesh reaches from the village to the Dire Wolf in the deep woods"));
+			}
+			if (State->bHasZones)
+			{
+				int32 Zones = 0;
+				for (TActorIterator<AMMODiscoveryZone> It(World); It; ++It)
+				{
+					++Zones;
+				}
+				Check(Zones >= 5, FString::Printf(TEXT("Zone has %d named discoverable locations"), Zones));
+			}
 			Check(Wolf->GetTargetDisplayName().ToString() == TEXT("Grey Wolf"), TEXT("Creature is named Grey Wolf"));
 			Check(State->Pack.Num() >= 2, TEXT("Several wolves exist (a lone wolf plus a pair)"));
 			Check(StateOf(Wolf) == EMMOCreatureAIState::Idle, TEXT("Wolf starts idle"));
@@ -278,6 +343,13 @@ namespace MMOSelfTest
 				Player->DoClearTarget();
 				Check(!HUD->GetHUDWidget()->IsInventoryOpen() && !HUD->GetHUDWidget()->IsCharacterOpen(), TEXT("Esc closes windows"));
 				Check(CursorShown(Player), TEXT("Mouse cursor stays visible and free with no windows open"));
+				if (State->bHasZones)
+				{
+					UMMOExplorationComponent* Exploration = Player->GetExploration();
+					Check(Exploration->GetCurrentZone() && Exploration->HasDiscovered(Exploration->GetCurrentZone()->LocationId), TEXT("Starting village is discovered on arrival"));
+					Check(TotalXP(Progression) == 0, TEXT("The starting village grants no XP"));
+				}
+				State->XPMark = TotalXP(Progression);
 				PlacePlayerNear(WolfHome, 600.0f);
 				NextStep();
 			}
@@ -289,6 +361,14 @@ namespace MMOSelfTest
 				Check(InCombat(Wolf), TEXT("Wolf aggros when the player enters its aggro range"));
 				Check(AIOf(Wolf) && AIOf(Wolf)->IsUsingNavigation(), TEXT("Wolf chases using NavMesh pathfinding"));
 				Check(FMath::Abs(Player->GetCameraBoom()->TargetArmLength - Player->GetDesiredCameraDistance()) < 40.0f, TEXT("Camera eased to the requested zoom distance"));
+				if (State->bHasZones)
+				{
+					const AMMODiscoveryZone* Zone = Player->GetExploration()->GetCurrentZone();
+					Check(Zone && Player->GetExploration()->HasDiscovered(Zone->LocationId), FString::Printf(TEXT("Walking out discovers %s"), Zone ? *Zone->LocationName.ToString() : TEXT("(no zone)")));
+					Check(Zone && TotalXP(Progression) == State->XPMark + Zone->DiscoveryXP, TEXT("Discovery awards its XP"));
+					Check(Zone && HUDOf(Player)->GetHUDWidget()->GetZoneBannerText().StartsWith(TEXT("Discovered:")), FString::Printf(TEXT("HUD shows \"%s\""), *HUDOf(Player)->GetHUDWidget()->GetZoneBannerText()));
+				}
+				State->XPMark = TotalXP(Progression);
 				NextStep();
 			}
 			break;
@@ -428,10 +508,11 @@ namespace MMOSelfTest
 				Check(!Combat->IsAutoAttacking(), TEXT("Auto-attack stops when the target dies"));
 				Check(Wolf->IsDead() && !Wolf->IsTargetable(), TEXT("Dead wolf is not targetable"));
 				Check(StateOf(Wolf) == EMMOCreatureAIState::Dead && !Wolf->IsAttacking(), TEXT("Dead wolf AI and attacks stop"));
-				Check(Progression->GetCurrentXP() == Wolf->XPReward, TEXT("Killing the wolf awards its XP"));
+				Check(TotalXP(Progression) == State->XPMark + Wolf->XPReward, TEXT("Killing the wolf awards its XP"));
 				Check(Combat->StartAutoAttack() == EMMOAttackResult::TargetDead, TEXT("Cannot attack a dead target"));
 				WolfHealth->ApplyDamage(10.0f, Player);
-				Check(Progression->GetCurrentXP() == Wolf->XPReward, TEXT("XP is awarded exactly once"));
+				Check(TotalXP(Progression) == State->XPMark + Wolf->XPReward, TEXT("XP is awarded exactly once"));
+				State->DeathMark = Now();
 
 				// loot
 				UMMOLootContainerComponent* Loot = Wolf->GetLoot();
@@ -545,22 +626,41 @@ namespace MMOSelfTest
 					Tooltip->RemoveFromParent();
 				}
 				HUDOf(Player)->CloseAllWindows();
-				PlacePlayerNear(WolfHome, 1500.0f);
+				PlacePlayerNear(WolfHome, 250.0f);
+				State->bFlag = false;
 				NextStep();
 			}
 			break;
 
-		case 16: // respawn: the looted corpse sinks away and the wolf returns fresh
+		case 16: // respawn waits while the player stands on the spawn point, then happens once they leave
+			if (!State->bFlag)
+			{
+				if (Wolf->GetRespawnDueTime() > State->DeathMark && Now() > Wolf->GetRespawnDueTime() + 1.5)
+				{
+					Check(Wolf->IsDead() && Wolf->IsHidden(), TEXT("Respawn is postponed while the player stands on the spawn point"));
+					State->bFlag = true;
+					State->Mark = Now();
+					PlacePlayerNear(WolfHome, 1500.0f);
+				}
+				else if (Elapsed() > Wolf->RespawnDelay + 6.0f)
+				{
+					Check(false, TEXT("Corpse was removed and respawn became due"));
+					State->bFlag = true;
+					State->Mark = Now();
+					PlacePlayerNear(WolfHome, 1500.0f);
+				}
+				break;
+			}
 			if (!Wolf->IsDead())
 			{
-				Check(Elapsed() >= 4.0f, TEXT("Looted corpse is removed and the wolf respawns"));
+				Check(Now() - State->Mark <= 4.5, TEXT("Wolf respawns once the player moves away"));
 				Check(WolfHealth->GetCurrentHealth() == WolfHealth->GetMaxHealth() && Wolf->IsTargetable(), TEXT("Respawned wolf has full health and is targetable"));
 				Check(FVector::Dist2D(Wolf->GetActorLocation(), WolfHome) < 10.0f, TEXT("Respawned wolf is at its spawn point"));
 				Check(!Wolf->GetLoot()->HasLoot(), TEXT("Respawned wolf carries no old loot"));
 				Check(Combat->GetCurrentTarget() == nullptr, TEXT("Target cleared once the corpse despawned"));
 				NextStep();
 			}
-			else if (Elapsed() > Wolf->RespawnDelay + 3.0f)
+			else if (Now() - State->Mark > 8.0)
 			{
 				Check(false, TEXT("Wolf respawned in time"));
 				NextStep();
@@ -568,8 +668,8 @@ namespace MMOSelfTest
 			break;
 
 		case 17: // XP overflow + level up
-			Progression->AddXP(90);
-			Check(Progression->GetLevel() == 2 && Progression->GetCurrentXP() == Wolf->XPReward + 90 - 100 && Progression->GetXPToNextLevel() == 150, TEXT("Level up at 100 XP with overflow; level 2 needs 150"));
+			Progression->AddXP(Progression->GetXPToNextLevel() - Progression->GetCurrentXP() + 30);
+			Check(Progression->GetLevel() == 2 && Progression->GetCurrentXP() == 30 && Progression->GetXPToNextLevel() == 150, TEXT("Level up with XP overflow; level 2 needs 150"));
 			Check(FMath::IsNearlyEqual(PlayerHealth->GetMaxHealth(), 110.0f) && FMath::IsNearlyEqual(PlayerHealth->GetCurrentHealth(), 110.0f), TEXT("Level up raises max health and heals"));
 			Check(FMath::IsNearlyEqual(Combat->BonusDamage, 2.0f), TEXT("Level up adds +2 swing damage"));
 			NextStep();
@@ -651,6 +751,8 @@ namespace MMOSelfTest
 			if (InCombat(A) && InCombat(B))
 			{
 				Check(true, TEXT("Several wolves independently aggro the player"));
+				Check(State->MaxWanderDistance > 60.0f, FString::Printf(TEXT("Idle wolves wander around their home (moved up to %.0fcm)"), State->MaxWanderDistance));
+				Check(State->MaxWanderDistance <= A->WanderRadius + 250.0f, FString::Printf(TEXT("Wandering stays within the wolf's territory (radius %.0f)"), A->WanderRadius));
 				UMMOLootTable::ForceNextDrop(Boots); // B's corpse gets a non-stackable item for the full-bag test
 				Combat->SetTarget(B);
 				Combat->StartAutoAttack();
@@ -689,7 +791,9 @@ namespace MMOSelfTest
 			if (B->IsDead())
 			{
 				Check(State->HitCount <= 4, FString::Printf(TEXT("Greyfang kills a 60 HP wolf in %d swings (Training Sword needs 4-5)"), State->HitCount));
-				Check(State->MinTargetHit >= 19.0f && State->MinTargetHit <= 24.0f, FString::Printf(TEXT("Greyfang swings hit for 19-24 at level 2 (lowest non-final hit %.0f)"), State->MinTargetHit));
+				float RangeMin, RangeMax;
+				Combat->GetDamageRange(RangeMin, RangeMax);
+				Check(RangeMin >= 19.0f && State->MinTargetHit >= RangeMin - 0.5f && State->MinTargetHit <= RangeMax + 0.5f, FString::Printf(TEXT("Greyfang swings hit for %.0f-%.0f (lowest non-final hit %.0f)"), RangeMin, RangeMax, State->MinTargetHit));
 				Check(A->GetHealth()->GetCurrentHealth() == State->OtherHealthMark, TEXT("Other aggressive wolves are not hit by auto-attack"));
 				Check(A->GetLastAttackTime() > State->Mark - 2.0 && B->GetLastAttackTime() > State->Mark - 2.0, TEXT("Both wolves attack the player"));
 				Check(State->LastPlayerDamage > 0.0f && State->LastPlayerDamage < A->AttackDamage, FString::Printf(TEXT("Armor reduces wolf bites (%.2f of %.0f)"), State->LastPlayerDamage, A->AttackDamage));
@@ -728,7 +832,9 @@ namespace MMOSelfTest
 			const int32 BootsOnCorpse = Loot->GetItems().FilterByPredicate([Boots](const FMMOItemStack& S) { return S.Item == Boots; }).Num();
 			const EMMOLootResult Result = Player->LootAll(Loot);
 			Check(Result == EMMOLootResult::InventoryFull || Result == EMMOLootResult::Partial, TEXT("Loot All with a full backpack reports Inventory Full"));
-			Check(BootsOnCorpse == 1 && Loot->GetItems().ContainsByPredicate([Boots](const FMMOItemStack& S) { return S.Item == Boots; }), TEXT("Loot that doesn't fit stays on the corpse"));
+			// the forced boots (plus any that dropped naturally) can't fit a full bag, so all of them must still be on the corpse
+			const int32 BootsLeft = Loot->GetItems().FilterByPredicate([Boots](const FMMOItemStack& S) { return S.Item == Boots; }).Num();
+			Check(BootsOnCorpse >= 1 && BootsLeft == BootsOnCorpse, FString::Printf(TEXT("Loot that doesn't fit stays on the corpse (%d of %d boots kept)"), BootsLeft, BootsOnCorpse));
 			Check(Player->UnequipSlot(EMMOEquipmentSlot::Feet) == EMMOEquipResult::InventoryFull && Equipment->GetEquipped(EMMOEquipmentSlot::Feet).Item == Boots, TEXT("Unequip is refused when the backpack is full"));
 
 			// remove the filler and take the rest
@@ -743,11 +849,46 @@ namespace MMOSelfTest
 			Player->DoClearTarget();
 			Check(Combat->GetCurrentTarget() == nullptr, TEXT("Esc with no windows open clears the target"));
 			State->ItemsBeforeDeath = CountOwned(Player);
+			State->LevelMark = Progression->GetLevel();
+
+			// the mine: discovered once; revisiting the meadow gives nothing more
+			State->bFlag = false;
+			if (AMMODiscoveryZone* Mine = FindZone(World, TEXT("RustveinMine")))
+			{
+				State->XPMark = TotalXP(Progression);
+				PlacePlayerNear(Mine->GetActorLocation(), 400.0f);
+			}
 			NextStep();
 			break;
 		}
 
-		case 26: // player death keeps every item
+		case 26:
+			if (!State->bHasZones)
+			{
+				NextStep();
+				break;
+			}
+			if (Elapsed() > 0.6f && !State->bFlag)
+			{
+				const AMMODiscoveryZone* Mine = FindZone(World, TEXT("RustveinMine"));
+				Check(Mine && Player->GetExploration()->HasDiscovered(Mine->LocationId) && TotalXP(Progression) == State->XPMark + Mine->DiscoveryXP,
+					TEXT("Reaching the abandoned mine discovers Rustvein Mine (+XP)"));
+				Shot(TEXT("7_Mine"));
+				State->bFlag = true;
+				State->XPMark = TotalXP(Progression);
+				State->LevelMark = Progression->GetLevel();
+				PlacePlayerNear(WolfHome, 1500.0f);
+			}
+			else if (State->bFlag && Elapsed() > 1.4f)
+			{
+				Check(TotalXP(Progression) == State->XPMark, TEXT("Revisiting a discovered zone awards nothing"));
+				State->bFlag = false;
+				NextStep();
+			}
+			break;
+
+		case 27: // player death keeps every item
+			State->LevelMark = Progression->GetLevel();
 			PlayerHealth->ApplyDamage(10000.0f, State->Pack[0].Get());
 			Check(Player->IsDead() && FMath::IsNearlyEqual(PlayerHealth->GetCurrentHealth(), 0.0f), TEXT("Player dies at zero health (never below)"));
 			Check(Combat->StartAutoAttack() == EMMOAttackResult::AttackerDead, TEXT("Dead player cannot attack"));
@@ -755,7 +896,7 @@ namespace MMOSelfTest
 			NextStep();
 			break;
 
-		case 27:
+		case 28:
 			if (!State->bFlag && Elapsed() > 0.6f)
 			{
 				State->bFlag = true;
@@ -765,7 +906,7 @@ namespace MMOSelfTest
 			{
 				Check(Elapsed() >= Player->GetRespawnDelay() - 0.5f, TEXT("Player respawns after the respawn delay"));
 				Check(PlayerHealth->GetCurrentHealth() == PlayerHealth->GetMaxHealth() && Player->InputEnabled(), TEXT("Respawned player has full health and control"));
-				Check(Progression->GetLevel() == 2, TEXT("Level is kept through death"));
+				Check(Progression->GetLevel() == State->LevelMark, TEXT("Level is kept through death"));
 				Check(CountOwned(Player) == State->ItemsBeforeDeath && Equipment->GetEquipped(EMMOEquipmentSlot::MainHand).Item == Greyfang, TEXT("Inventory and equipment are kept through death"));
 				Check(!InCombat(State->Pack[0].Get()), TEXT("Wolves disengage after the player dies"));
 				Finish();
@@ -798,11 +939,25 @@ namespace MMOSelfTest
 		State->Player = Cast<AMMOCharacter>(UGameplayStatics::GetPlayerPawn(World, 0));
 		State->SafeOrigin = State->Player.IsValid() ? State->Player->GetActorLocation() : FVector::ZeroVector;
 
-		// the lone wolf (nearest the player start) is the main test subject; the others form the pack
+		// deterministic loot: only the drops the test forces (random rolls are covered by MMO.Items automation tests)
+		if (IConsoleVariable* LootChance = IConsoleManager::Get().FindConsoleVariable(TEXT("mmo.Loot.ChanceMultiplier")))
+		{
+			State->SavedLootChance = LootChance->GetFloat();
+			LootChance->Set(0.0f);
+		}
+
+		// the Grey Wolf nearest the player start is the main test subject; the closest pair of the others is the pack
 		TArray<AMMOCreature*> Creatures;
 		for (TActorIterator<AMMOCreature> It(World); It; ++It)
 		{
-			Creatures.Add(*It);
+			if (It->GetClass() == AMMODireWolf::StaticClass())
+			{
+				State->Dire = *It;
+			}
+			else
+			{
+				Creatures.Add(*It);
+			}
 		}
 		Creatures.Sort([](const AMMOCreature& A, const AMMOCreature& B)
 		{
@@ -812,9 +967,31 @@ namespace MMOSelfTest
 		{
 			State->Wolf = Creatures[0];
 		}
-		for (int32 i = 1; i < Creatures.Num(); ++i)
+		// prefer a pair well away from the main wolf (so they don't join that fight); fall back to any pair
+		for (const float MinSeparation : { 2500.0f, 0.0f })
 		{
-			State->Pack.Add(Creatures[i]);
+			float BestPair = TNumericLimits<float>::Max();
+			for (int32 i = 1; i < Creatures.Num(); ++i)
+			{
+				for (int32 j = i + 1; j < Creatures.Num(); ++j)
+				{
+					const float D = FVector::Dist2D(Creatures[i]->GetActorLocation(), Creatures[j]->GetActorLocation());
+					if (D < BestPair && FVector::Dist2D(Creatures[i]->GetActorLocation(), Creatures[0]->GetActorLocation()) >= MinSeparation)
+					{
+						BestPair = D;
+						State->Pack = { Creatures[i], Creatures[j] };
+					}
+				}
+			}
+			if (State->Pack.Num() == 2)
+			{
+				break;
+			}
+		}
+		for (TActorIterator<AMMODiscoveryZone> It(World); It; ++It)
+		{
+			State->bHasZones = true;
+			break;
 		}
 
 		// remember the last damage the player took (to check armor)

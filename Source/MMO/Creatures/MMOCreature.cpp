@@ -131,8 +131,9 @@ void AMMOCreature::BeginPlay()
 	SpawnTransform = GetActorTransform();
 	GetCharacterMovement()->MaxWalkSpeed = ChaseSpeed;
 
-	const float Radius = GetCapsuleComponent()->GetScaledCapsuleRadius();
-	const float HalfHeight = GetCapsuleComponent()->GetScaledCapsuleHalfHeight();
+	// children of the capsule inherit its scale, so lay them out in unscaled units
+	const float Radius = GetCapsuleComponent()->GetUnscaledCapsuleRadius();
+	const float HalfHeight = GetCapsuleComponent()->GetUnscaledCapsuleHalfHeight();
 
 	// lay out the target ring on the ground around the capsule
 	TargetIndicator->SetRelativeLocation(FVector(0.0f, 0.0f, -HalfHeight + 2.0f));
@@ -471,11 +472,26 @@ void AMMOCreature::HideCorpse()
 	LootMarker->SetHiddenInGame(true);
 
 	const float SinceDeath = static_cast<float>(GetWorld()->GetTimeSeconds() - DeathTime);
-	GetWorldTimerManager().SetTimer(RespawnTimer, this, &AMMOCreature::Respawn, FMath::Max(MinRespawnAfterCorpse, RespawnDelay - SinceDeath), false);
+	const float Delay = FMath::Max(MinRespawnAfterCorpse, RespawnDelay - SinceDeath);
+	RespawnDueTime = GetWorld()->GetTimeSeconds() + Delay;
+	GetWorldTimerManager().SetTimer(RespawnTimer, this, &AMMOCreature::Respawn, Delay, false);
+}
+
+bool AMMOCreature::IsPlayerNearSpawn() const
+{
+	const APawn* Player = UGameplayStatics::GetPlayerPawn(this, 0);
+	return Player && FVector::Dist(Player->GetActorLocation(), SpawnTransform.GetLocation()) < MinRespawnPlayerDistance;
 }
 
 void AMMOCreature::Respawn()
 {
+	// don't pop into existence right next to the player: wait for them to move on (up to a limit)
+	if (IsPlayerNearSpawn() && GetWorld()->GetTimeSeconds() - RespawnDueTime < MaxRespawnDeferral)
+	{
+		GetWorldTimerManager().SetTimer(RespawnTimer, this, &AMMOCreature::Respawn, 3.0f, false);
+		return;
+	}
+
 	TeleportTo(SpawnTransform.GetLocation(), SpawnTransform.Rotator(), false, true);
 
 	bIsDead = false;

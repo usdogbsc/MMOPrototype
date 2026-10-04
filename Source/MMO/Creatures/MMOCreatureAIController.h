@@ -79,6 +79,13 @@ protected:
 	/** World time until which we steer directly instead of pathing */
 	double DirectSteerUntil = 0.0;
 
+	/** Idle wandering */
+	double NextWanderTime = 0.0;
+	bool bWandering = false;
+
+	void TickWander(AMMOCreature* Creature);
+	void ScheduleNextWander(const AMMOCreature* Creature);
+
 	void SetState(EMMOCreatureAIState NewState);
 
 	AMMOCreature* GetCreature() const;

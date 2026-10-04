@@ -6,6 +6,8 @@
 #include "Combat/MMOHealthComponent.h"
 #include "Kismet/GameplayStatics.h"
 #include "Navigation/PathFollowingComponent.h"
+#include "NavigationSystem.h"
+#include "GameFramework/CharacterMovementComponent.h"
 #include "MMO.h"
 
 AMMOCreatureAIController::AMMOCreatureAIController()
@@ -51,6 +53,8 @@ void AMMOCreatureAIController::NotifyPawnDied()
 
 void AMMOCreatureAIController::NotifyPawnRespawned()
 {
+	bWandering = false;
+	NextWanderTime = 0.0;
 	ThreatTarget.Reset();
 	StopMoving();
 	SetState(EMMOCreatureAIState::Idle);
@@ -116,9 +120,62 @@ void AMMOCreatureAIController::TickIdle(AMMOCreature* Creature)
 {
 	if (AActor* Threat = ChooseThreat(Creature))
 	{
+		bWandering = false;
 		ThreatTarget = Threat;
 		SetState(EMMOCreatureAIState::Chasing);
+		return;
 	}
+
+	TickWander(Creature);
+}
+
+void AMMOCreatureAIController::ScheduleNextWander(const AMMOCreature* Creature)
+{
+	NextWanderTime = GetWorld()->GetTimeSeconds() + FMath::FRandRange(Creature->WanderPause.X, FMath::Max(Creature->WanderPause.X, Creature->WanderPause.Y));
+}
+
+void AMMOCreatureAIController::TickWander(AMMOCreature* Creature)
+{
+	if (Creature->WanderRadius <= 0.0f)
+	{
+		return;
+	}
+
+	const double Now = GetWorld()->GetTimeSeconds();
+	if (bWandering)
+	{
+		// arrived (or the move ended): pause and look around before the next stroll
+		if (!IsUsingNavigation())
+		{
+			bWandering = false;
+			ScheduleNextWander(Creature);
+		}
+		return;
+	}
+
+	if (NextWanderTime == 0.0)
+	{
+		ScheduleNextWander(Creature);
+		return;
+	}
+	if (Now < NextWanderTime)
+	{
+		return;
+	}
+
+	// a short walk to a reachable spot near home
+	UNavigationSystemV1* NavSys = FNavigationSystem::GetCurrent<UNavigationSystemV1>(GetWorld());
+	FNavLocation Destination;
+	if (NavSys && NavSys->GetRandomReachablePointInRadius(Creature->GetSpawnTransform().GetLocation(), Creature->WanderRadius, Destination))
+	{
+		Creature->GetCharacterMovement()->MaxWalkSpeed = Creature->WanderSpeed;
+		if (MoveToLocation(Destination.Location, 40.0f, false, true, false, false, nullptr, false) != EPathFollowingRequestResult::Failed)
+		{
+			bWandering = true;
+			return;
+		}
+	}
+	ScheduleNextWander(Creature);
 }
 
 void AMMOCreatureAIController::TickChasing(AMMOCreature* Creature)
@@ -193,6 +250,8 @@ void AMMOCreatureAIController::TickReturning(AMMOCreature* Creature)
 		Creature->SetActorRotation(Home.Rotator());
 		Creature->GetHealth()->ResetHealth();
 		ThreatTarget.Reset();
+		bWandering = false;
+		NextWanderTime = 0.0;
 		SetState(EMMOCreatureAIState::Idle);
 		return;
 	}

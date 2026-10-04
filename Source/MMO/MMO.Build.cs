@@ -21,7 +21,8 @@ public class MMO : ModuleRules
 			"Slate",
 			"SlateCore",
 			"NavigationSystem",
-			"Niagara"
+			"Niagara",
+			"ProceduralMeshComponent"
 		});
 
 		PrivateDependencyModuleNames.AddRange(new string[] { });

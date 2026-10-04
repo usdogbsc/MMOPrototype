@@ -23,6 +23,7 @@
 #include "Items/MMOItemDefinition.h"
 #include "Items/MMOLootContainerComponent.h"
 #include "UI/MMOHUD.h"
+#include "World/MMOExplorationComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "EngineUtils.h"
 #include "Materials/MaterialInstanceDynamic.h"
@@ -99,6 +100,7 @@ AMMOCharacter::AMMOCharacter()
 	// items
 	Inventory = CreateDefaultSubobject<UMMOInventoryComponent>(TEXT("Inventory"));
 	Equipment = CreateDefaultSubobject<UMMOEquipmentComponent>(TEXT("Equipment"));
+	Exploration = CreateDefaultSubobject<UMMOExplorationComponent>(TEXT("Exploration"));
 
 	MainHandMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("MainHandMesh"));
 	MainHandMesh->SetupAttachment(GetMesh(), MainHandSocket);

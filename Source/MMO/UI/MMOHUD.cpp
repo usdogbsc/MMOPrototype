@@ -48,6 +48,12 @@ void AMMOHUD::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
 
+	// keep the widget bound to the current pawn even when it isn't being painted
+	if (HUDWidget)
+	{
+		HUDWidget->SyncToOwningPawn();
+	}
+
 	// the loot window closes when its corpse is emptied, despawns, or the player walks away
 	if (HUDWidget && HUDWidget->IsLootOpen())
 	{

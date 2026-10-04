@@ -8,6 +8,8 @@
 #include "Items/MMOInventoryComponent.h"
 #include "Items/MMOItemDefinition.h"
 #include "Items/MMOLootContainerComponent.h"
+#include "World/MMODiscoveryZone.h"
+#include "World/MMOExplorationComponent.h"
 #include "UI/MMOUIStyle.h"
 #include "UI/MMOUnitFrameWidget.h"
 #include "MMOCharacter.h"
@@ -140,6 +142,15 @@ void UMMOHUDWidget::BuildDefaultLayout()
 	RareLootBanner->SetRenderOpacity(0.0f);
 	Place(Root, RareLootBanner, FAnchors(0.5f, 0.0f), FVector2D(0.5f, 0.0f), FVector2D(0.0f, 330.0f));
 
+	// zone name / discovery banner
+	UVerticalBox* ZoneBox = WidgetTree->ConstructWidget<UVerticalBox>(UVerticalBox::StaticClass(), TEXT("ZoneBanner"));
+	ZoneTitleText = MakeText(WidgetTree, TEXT(""), 28, FLinearColor::White, true, ETextJustify::Center);
+	ZoneSubtitleText = MakeText(WidgetTree, TEXT(""), 14, Colors::TextDim, false, ETextJustify::Center);
+	ZoneBox->AddChildToVerticalBox(ZoneTitleText)->SetHorizontalAlignment(HAlign_Center);
+	ZoneBox->AddChildToVerticalBox(ZoneSubtitleText)->SetHorizontalAlignment(HAlign_Center);
+	ZoneBox->SetRenderOpacity(0.0f);
+	Place(Root, ZoneBox, FAnchors(0.5f, 0.0f), FVector2D(0.5f, 0.0f), FVector2D(0.0f, 92.0f));
+
 	// everything above is display-only
 	for (UWidget* Child : Root->GetAllChildren())
 	{
@@ -206,11 +217,8 @@ void UMMOHUDWidget::NativeTick(const FGeometry& MyGeometry, float InDeltaTime)
 {
 	Super::NativeTick(MyGeometry, InDeltaTime);
 
-	AMMOCharacter* Character = Cast<AMMOCharacter>(GetOwningPlayerPawn());
-	if (Character != BoundCharacter.Get())
-	{
-		BindToCharacter(Character);
-	}
+	SyncToOwningPawn();
+	AMMOCharacter* Character = BoundCharacter.Get();
 
 	UpdateFrames(Character);
 	UpdateFloatingTexts(InDeltaTime);
@@ -337,6 +345,12 @@ void UMMOHUDWidget::UpdateLootFeed(float DeltaSeconds)
 		Line->SetRenderOpacity(Entry.Age < 3.5f ? 1.0f : 1.0f - (Entry.Age - 3.5f));
 	}
 
+	if (ZoneTitleText && ZoneTitleText->GetParent())
+	{
+		ZoneBannerTime = FMath::Max(0.0f, ZoneBannerTime - DeltaSeconds);
+		ZoneTitleText->GetParent()->SetRenderOpacity(FMath::Min(1.0f, ZoneBannerTime / 0.8f));
+	}
+
 	if (RareLootBanner)
 	{
 		RareBannerTime = FMath::Max(0.0f, RareBannerTime - DeltaSeconds);
@@ -364,9 +378,52 @@ void UMMOHUDWidget::HandleItemsReceived(UMMOItemDefinition* Item, int32 Quantity
 	}
 }
 
+FString UMMOHUDWidget::GetZoneBannerText() const
+{
+	return ZoneTitleText && ZoneBannerTime > 0.0f ? ZoneTitleText->GetText().ToString() : FString();
+}
+
+void UMMOHUDWidget::ShowZoneBanner(const FString& Title, const FString& Subtitle, const FLinearColor& Color, float Duration)
+{
+	if (!ZoneTitleText || !ZoneSubtitleText)
+	{
+		return;
+	}
+	ZoneTitleText->SetText(FText::FromString(Title));
+	ZoneTitleText->SetColorAndOpacity(FSlateColor(Color));
+	ZoneSubtitleText->SetText(FText::FromString(Subtitle));
+	ZoneBannerTime = Duration;
+}
+
+void UMMOHUDWidget::HandleZoneChanged(AMMODiscoveryZone* NewZone)
+{
+	if (NewZone)
+	{
+		ShowZoneBanner(NewZone->LocationName.ToString(), NewZone->Subtitle.ToString(), FLinearColor(0.95f, 0.93f, 0.85f), 3.0f);
+	}
+}
+
+void UMMOHUDWidget::HandleLocationDiscovered(AMMODiscoveryZone* Zone, int32 XPAwarded)
+{
+	if (Zone)
+	{
+		const FString Subtitle = XPAwarded > 0 ? FString::Printf(TEXT("%s    +%d XP"), *Zone->Subtitle.ToString(), XPAwarded) : Zone->Subtitle.ToString();
+		ShowZoneBanner(FString::Printf(TEXT("Discovered: %s"), *Zone->LocationName.ToString()), Subtitle, MMOUI::Colors::Gold, 4.5f);
+	}
+}
+
 void UMMOHUDWidget::HandleCurrencyReceived(int32 Amount)
 {
 	AddLootFeedLine(FString::Printf(TEXT("+ %s"), *MMOItems::FormatCurrency(Amount)), MMOUI::Colors::Gold);
+}
+
+void UMMOHUDWidget::SyncToOwningPawn()
+{
+	AMMOCharacter* Character = Cast<AMMOCharacter>(GetOwningPlayerPawn());
+	if (Character != BoundCharacter.Get())
+	{
+		BindToCharacter(Character);
+	}
 }
 
 void UMMOHUDWidget::BindToCharacter(AMMOCharacter* Character)
@@ -386,6 +443,12 @@ void UMMOHUDWidget::BindToCharacter(AMMOCharacter* Character)
 	Character->GetInventory()->OnItemsReceived.AddDynamic(this, &UMMOHUDWidget::HandleItemsReceived);
 	Character->GetInventory()->OnCurrencyReceived.AddDynamic(this, &UMMOHUDWidget::HandleCurrencyReceived);
 	Character->OnPlayerMessage.AddDynamic(this, &UMMOHUDWidget::HandleCombatError);
+	Character->GetExploration()->OnZoneChanged.AddDynamic(this, &UMMOHUDWidget::HandleZoneChanged);
+	Character->GetExploration()->OnLocationDiscovered.AddDynamic(this, &UMMOHUDWidget::HandleLocationDiscovered);
+	if (AMMODiscoveryZone* Zone = Character->GetExploration()->GetCurrentZone())
+	{
+		HandleZoneChanged(Zone);
+	}
 
 	if (InventoryWindow)
 	{
@@ -408,6 +471,8 @@ void UMMOHUDWidget::UnbindFromCharacter()
 		Character->GetInventory()->OnItemsReceived.RemoveAll(this);
 		Character->GetInventory()->OnCurrencyReceived.RemoveAll(this);
 		Character->OnPlayerMessage.RemoveAll(this);
+		Character->GetExploration()->OnZoneChanged.RemoveAll(this);
+		Character->GetExploration()->OnLocationDiscovered.RemoveAll(this);
 	}
 	BoundCharacter.Reset();
 }

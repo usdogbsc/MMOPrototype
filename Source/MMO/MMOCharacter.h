@@ -24,6 +24,7 @@ class UMMOProgressionComponent;
 class UMMOInventoryComponent;
 class UMMOEquipmentComponent;
 class UMMOLootContainerComponent;
+class UMMOExplorationComponent;
 class UStaticMeshComponent;
 class AMMOCreature;
 struct FInputActionValue;
@@ -66,6 +67,10 @@ class AMMOCharacter : public ACharacter, public IMMOMeleeAttacker
 	/** Worn items */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Components", meta = (AllowPrivateAccess = "true"))
 	TObjectPtr<UMMOEquipmentComponent> Equipment;
+
+	/** Zone discovery and ambience */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Components", meta = (AllowPrivateAccess = "true"))
+	TObjectPtr<UMMOExplorationComponent> Exploration;
 
 	/** Visual for the main-hand item (uses the item's Equipped Mesh, if any) */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Components", meta = (AllowPrivateAccess = "true"))
@@ -481,5 +486,7 @@ public:
 	FORCEINLINE UMMOInventoryComponent* GetInventory() const { return Inventory; }
 
 	FORCEINLINE UMMOEquipmentComponent* GetEquipment() const { return Equipment; }
+
+	FORCEINLINE UMMOExplorationComponent* GetExploration() const { return Exploration; }
 };
 

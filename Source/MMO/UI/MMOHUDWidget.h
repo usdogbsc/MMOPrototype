@@ -20,6 +20,7 @@ class UMMOCharacterWindowWidget;
 class UMMOLootWindowWidget;
 class UMMOLootContainerComponent;
 class UMMOItemDefinition;
+class AMMODiscoveryZone;
 
 /**
  *  Root MMO HUD: player frame, target frame, Basic Attack hotbar slot, floating combat text, banners and screen flashes.
@@ -54,6 +55,12 @@ public:
 	UMMOInventoryWindowWidget* GetInventoryWindow() const { return InventoryWindow; }
 	UMMOCharacterWindowWidget* GetCharacterWindow() const { return CharacterWindow; }
 	UMMOLootWindowWidget* GetLootWindow() const { return LootWindow; }
+
+	/** Binds to the owning player's character if it changed (also called by AMMOHUD every tick) */
+	void SyncToOwningPawn();
+
+	/** Text currently shown in the zone banner (empty when hidden) */
+	FString GetZoneBannerText() const;
 
 	/** Fired when a window closes itself (close button, loot emptied or out of reach) */
 	FSimpleDelegate OnWindowClosed;
@@ -129,6 +136,15 @@ protected:
 		float Age = 0.0f;
 	};
 
+	/** Zone name / "Discovered:" banner, top-center */
+	UPROPERTY(BlueprintReadOnly, Category="HUD", meta=(BindWidgetOptional))
+	TObjectPtr<UTextBlock> ZoneTitleText;
+
+	UPROPERTY(BlueprintReadOnly, Category="HUD", meta=(BindWidgetOptional))
+	TObjectPtr<UTextBlock> ZoneSubtitleText;
+
+	float ZoneBannerTime = 0.0f;
+
 	TArray<FLootFeedEntry> LootFeedEntries;
 	float RareBannerTime = 0.0f;
 
@@ -184,6 +200,14 @@ protected:
 
 	UFUNCTION()
 	void HandleCurrencyReceived(int32 Amount);
+
+	UFUNCTION()
+	void HandleZoneChanged(AMMODiscoveryZone* NewZone);
+
+	UFUNCTION()
+	void HandleLocationDiscovered(AMMODiscoveryZone* Zone, int32 XPAwarded);
+
+	void ShowZoneBanner(const FString& Title, const FString& Subtitle, const FLinearColor& Color, float Duration);
 
 	void AddLootFeedLine(const FString& Text, const FLinearColor& Color);
 	void UpdateLootFeed(float DeltaSeconds);
