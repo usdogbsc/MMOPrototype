@@ -4,6 +4,7 @@
 #include "UI/MMOHUDWidget.h"
 #include "MMOCharacter.h"
 #include "Items/MMOLootContainerComponent.h"
+#include "NPC/MMONPC.h"
 #include "GameFramework/PlayerController.h"
 #include "Kismet/GameplayStatics.h"
 #include "Sound/SoundBase.h"
@@ -64,6 +65,53 @@ void AMMOHUD::Tick(float DeltaSeconds)
 			CloseLoot();
 		}
 	}
+
+	// conversations end when the player walks away from the NPC
+	if (HUDWidget && HUDWidget->IsDialogueOpen())
+	{
+		const APawn* Pawn = GetOwningPawn();
+		const AMMONPC* NPC = HUDWidget->GetDialogueNPC();
+		if (!Pawn || !NPC || FVector::Dist2D(Pawn->GetActorLocation(), NPC->GetActorLocation()) > NPC->GetInteractRange() + 250.0f)
+		{
+			CloseDialogue();
+		}
+	}
+}
+
+void AMMOHUD::ToggleQuestLog()
+{
+	if (HUDWidget)
+	{
+		const bool bOpen = !HUDWidget->IsQuestLogOpen();
+		HUDWidget->SetQuestLogOpen(bOpen);
+		PlayUISound(bOpen ? LoadedWindowOpenSound : LoadedWindowCloseSound);
+		UpdateInputMode();
+	}
+}
+
+void AMMOHUD::OpenDialogue(AMMONPC* NPC)
+{
+	if (HUDWidget && NPC)
+	{
+		const bool bWasOpen = HUDWidget->IsDialogueOpen();
+		HUDWidget->CloseLoot();
+		HUDWidget->OpenDialogue(NPC);
+		if (!bWasOpen)
+		{
+			PlayUISound(LoadedWindowOpenSound);
+		}
+		UpdateInputMode();
+	}
+}
+
+void AMMOHUD::CloseDialogue()
+{
+	if (HUDWidget && HUDWidget->IsDialogueOpen())
+	{
+		HUDWidget->CloseDialogue();
+		PlayUISound(LoadedWindowCloseSound);
+		UpdateInputMode();
+	}
 }
 
 void AMMOHUD::ToggleInventory()
@@ -121,6 +169,8 @@ bool AMMOHUD::CloseAllWindows()
 	HUDWidget->SetInventoryOpen(false);
 	HUDWidget->SetCharacterOpen(false);
 	HUDWidget->CloseLoot();
+	HUDWidget->CloseDialogue();
+	HUDWidget->SetQuestLogOpen(false);
 	PlayUISound(LoadedWindowCloseSound);
 	UpdateInputMode();
 	return true;
@@ -128,7 +178,7 @@ bool AMMOHUD::CloseAllWindows()
 
 bool AMMOHUD::IsAnyWindowOpen() const
 {
-	return HUDWidget && (HUDWidget->IsInventoryOpen() || HUDWidget->IsCharacterOpen() || HUDWidget->IsLootOpen());
+	return HUDWidget && (HUDWidget->IsInventoryOpen() || HUDWidget->IsCharacterOpen() || HUDWidget->IsLootOpen() || HUDWidget->IsDialogueOpen() || HUDWidget->IsQuestLogOpen());
 }
 
 void AMMOHUD::HandleWindowClosed()

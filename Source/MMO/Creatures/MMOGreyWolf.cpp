@@ -21,6 +21,7 @@ AMMOGreyWolf::AMMOGreyWolf()
 	ChaseSpeed = 420.0f;
 	ReturnSpeed = 700.0f;
 	XPReward = 40;
+	QuestTag = TEXT("GreyWolf");
 	CorpseDuration = 4.0f;
 	RespawnDelay = 8.0f;
 

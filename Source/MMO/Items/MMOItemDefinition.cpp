@@ -12,16 +12,33 @@ UMMOItemDefinition* UMMOItemDefinition::FindById(FName InItemId)
 		return nullptr;
 	}
 
+	// ids are looked up often (quest progress, markers), so remember what we found
+	static TMap<FName, TWeakObjectPtr<UMMOItemDefinition>> Cache;
+	if (const TWeakObjectPtr<UMMOItemDefinition>* Cached = Cache.Find(InItemId))
+	{
+		if (Cached->IsValid() && (*Cached)->ItemId == InItemId)
+		{
+			return Cached->Get();
+		}
+		Cache.Remove(InItemId);
+	}
+
 	for (TObjectIterator<UMMOItemDefinition> It; It; ++It)
 	{
 		if (It->ItemId == InItemId && !It->HasAnyFlags(RF_ClassDefaultObject))
 		{
+			Cache.Add(InItemId, *It);
 			return *It;
 		}
 	}
 
 	const FString Name = FString::Printf(TEXT("DA_Item_%s"), *InItemId.ToString());
-	return LoadObject<UMMOItemDefinition>(nullptr, *FString::Printf(TEXT("/Game/MMO/Items/%s.%s"), *Name, *Name), nullptr, LOAD_NoWarn);
+	UMMOItemDefinition* Loaded = LoadObject<UMMOItemDefinition>(nullptr, *FString::Printf(TEXT("/Game/MMO/Items/%s.%s"), *Name, *Name), nullptr, LOAD_NoWarn);
+	if (Loaded)
+	{
+		Cache.Add(InItemId, Loaded);
+	}
+	return Loaded;
 }
 
 namespace MMOItems

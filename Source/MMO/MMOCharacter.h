@@ -25,6 +25,7 @@ class UMMOInventoryComponent;
 class UMMOEquipmentComponent;
 class UMMOLootContainerComponent;
 class UMMOExplorationComponent;
+class UMMOQuestLogComponent;
 class UStaticMeshComponent;
 class AMMOCreature;
 struct FInputActionValue;
@@ -71,6 +72,10 @@ class AMMOCharacter : public ACharacter, public IMMOMeleeAttacker
 	/** Zone discovery and ambience */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Components", meta = (AllowPrivateAccess = "true"))
 	TObjectPtr<UMMOExplorationComponent> Exploration;
+
+	/** Accepted and completed quests */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Components", meta = (AllowPrivateAccess = "true"))
+	TObjectPtr<UMMOQuestLogComponent> QuestLog;
 
 	/** Visual for the main-hand item (uses the item's Equipped Mesh, if any) */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Components", meta = (AllowPrivateAccess = "true"))
@@ -133,6 +138,10 @@ protected:
 	/** Toggle the character window. If unset, a runtime action bound to C is created */
 	UPROPERTY(EditAnywhere, Category="Input|Items")
 	TObjectPtr<UInputAction> CharacterAction;
+
+	/** Toggle the quest log. If unset, a runtime action bound to L is created */
+	UPROPERTY(EditAnywhere, Category="Input|Items")
+	TObjectPtr<UInputAction> QuestLogAction;
 
 	/** How close the player must be to loot a corpse */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Items", meta=(ClampMin=0, Units="cm"))
@@ -430,6 +439,15 @@ public:
 	/** Right-click behaviour: loot a corpse, or target and auto-attack a living enemy */
 	void InteractWith(AMMOCreature* Creature);
 
+	/** The NPC / object (IMMOInteractable) under the mouse cursor, and how far along the ray it is */
+	AActor* GetInteractableUnderCursor(float* OutDistance = nullptr) const;
+
+	/** Nearest usable interactable within its interact range */
+	AActor* FindNearestInteractable() const;
+
+	/** Uses an IMMOInteractable (talks to an NPC...). Reports "too far" etc. Returns true if it was used */
+	bool TryInteract(AActor* Target);
+
 	/** Loots the nearest corpse in reach (opens the loot window) */
 	UFUNCTION(BlueprintCallable, Category="Input")
 	virtual void DoInteract();
@@ -439,6 +457,9 @@ public:
 
 	UFUNCTION(BlueprintCallable, Category="Input")
 	virtual void DoToggleCharacter();
+
+	UFUNCTION(BlueprintCallable, Category="Input")
+	virtual void DoToggleQuestLog();
 
 	/** Item actions used by the UI and debug tools. Each reports problems through OnPlayerMessage */
 	EMMOEquipResult EquipInventorySlot(int32 SlotIndex);
@@ -488,5 +509,7 @@ public:
 	FORCEINLINE UMMOEquipmentComponent* GetEquipment() const { return Equipment; }
 
 	FORCEINLINE UMMOExplorationComponent* GetExploration() const { return Exploration; }
+
+	FORCEINLINE UMMOQuestLogComponent* GetQuestLog() const { return QuestLog; }
 };
 

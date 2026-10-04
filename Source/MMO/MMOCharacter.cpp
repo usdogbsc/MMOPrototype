@@ -24,6 +24,8 @@
 #include "Items/MMOLootContainerComponent.h"
 #include "UI/MMOHUD.h"
 #include "World/MMOExplorationComponent.h"
+#include "World/MMOInteractable.h"
+#include "Quests/MMOQuestLogComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "EngineUtils.h"
 #include "Materials/MaterialInstanceDynamic.h"
@@ -101,6 +103,7 @@ AMMOCharacter::AMMOCharacter()
 	Inventory = CreateDefaultSubobject<UMMOInventoryComponent>(TEXT("Inventory"));
 	Equipment = CreateDefaultSubobject<UMMOEquipmentComponent>(TEXT("Equipment"));
 	Exploration = CreateDefaultSubobject<UMMOExplorationComponent>(TEXT("Exploration"));
+	QuestLog = CreateDefaultSubobject<UMMOQuestLogComponent>(TEXT("QuestLog"));
 
 	MainHandMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("MainHandMesh"));
 	MainHandMesh->SetupAttachment(GetMesh(), MainHandSocket);
@@ -227,6 +230,7 @@ void AMMOCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputCompon
 		EnhancedInputComponent->BindAction(InteractAction, ETriggerEvent::Started, this, &AMMOCharacter::DoInteract);
 		EnhancedInputComponent->BindAction(InventoryAction, ETriggerEvent::Started, this, &AMMOCharacter::DoToggleInventory);
 		EnhancedInputComponent->BindAction(CharacterAction, ETriggerEvent::Started, this, &AMMOCharacter::DoToggleCharacter);
+		EnhancedInputComponent->BindAction(QuestLogAction, ETriggerEvent::Started, this, &AMMOCharacter::DoToggleQuestLog);
 
 		// Camera zoom
 		EnhancedInputComponent->BindAction(ZoomAction, ETriggerEvent::Triggered, this, &AMMOCharacter::Zoom);
@@ -344,6 +348,7 @@ void AMMOCharacter::CreateDefaultCombatInput()
 	EnsureAction(RightClickAction, TEXT("IA_MMORightClick_Runtime"), EKeys::RightMouseButton);
 	EnsureAction(InventoryAction, TEXT("IA_MMOInventory_Runtime"), EKeys::B, EInputActionValueType::Boolean, EKeys::I);
 	EnsureAction(CharacterAction, TEXT("IA_MMOCharacter_Runtime"), EKeys::C);
+	EnsureAction(QuestLogAction, TEXT("IA_MMOQuestLog_Runtime"), EKeys::L);
 
 	if (const APlayerController* PC = Cast<APlayerController>(GetController()))
 	{
@@ -373,7 +378,7 @@ void AMMOCharacter::DoTarget()
 		{
 			Combat->SetTarget(Creature);
 		}
-		else
+		else if (!GetInteractableUnderCursor())
 		{
 			Combat->ClearTarget();
 		}
@@ -660,8 +665,101 @@ void AMMOCharacter::OnRightMouseReleased()
 	bRightMouseHeld = false;
 	if (bWasClick && !IsDead())
 	{
-		InteractWith(GetCreatureUnderCursor());
+		// whichever is nearer along the cursor ray: an NPC / object, or a creature
+		float InteractableDistance = 0.0f;
+		AActor* Interactable = GetInteractableUnderCursor(&InteractableDistance);
+		AMMOCreature* Creature = GetCreatureUnderCursor();
+		const APlayerController* PC = Cast<APlayerController>(GetController());
+		FVector Origin, Direction;
+		const bool bCreatureNearer = Creature && PC && PC->DeprojectMousePositionToWorld(Origin, Direction)
+			&& FVector::DotProduct(Creature->GetActorLocation() - Origin, Direction.GetSafeNormal()) < InteractableDistance;
+
+		if (Interactable && !bCreatureNearer)
+		{
+			TryInteract(Interactable);
+		}
+		else
+		{
+			InteractWith(Creature);
+		}
 	}
+}
+
+AActor* AMMOCharacter::GetInteractableUnderCursor(float* OutDistance) const
+{
+	const APlayerController* PC = Cast<APlayerController>(GetController());
+	FVector Origin, Direction;
+	if (!PC || !PC->bShowMouseCursor || !PC->DeprojectMousePositionToWorld(Origin, Direction))
+	{
+		return nullptr;
+	}
+	const FVector Dir = Direction.GetSafeNormal();
+
+	AActor* Best = nullptr;
+	float BestAlong = 6000.0f;
+	for (AActor* Actor : MMOInteraction::GetAll(GetWorld()))
+	{
+		const IMMOInteractable* Interactable = Cast<IMMOInteractable>(Actor);
+		const FVector Center = Interactable->GetInteractLocation();
+		const float Along = FVector::DotProduct(Center - Origin, Dir);
+		if (Along <= 0.0f || Along >= BestAlong || FVector::Dist(Origin + Dir * Along, Center) > Interactable->GetInteractPickRadius())
+		{
+			continue;
+		}
+
+		FCollisionQueryParams Params(SCENE_QUERY_STAT(MMOInteractPick), false, this);
+		Params.AddIgnoredActor(Actor);
+		FHitResult Hit;
+		if (GetWorld()->LineTraceSingleByChannel(Hit, Origin, Center, ECC_Visibility, Params))
+		{
+			continue;
+		}
+		BestAlong = Along;
+		Best = Actor;
+	}
+
+	if (OutDistance)
+	{
+		*OutDistance = BestAlong;
+	}
+	return Best;
+}
+
+AActor* AMMOCharacter::FindNearestInteractable() const
+{
+	AActor* Best = nullptr;
+	float BestDistance = TNumericLimits<float>::Max();
+	for (AActor* Actor : MMOInteraction::GetAll(GetWorld()))
+	{
+		const IMMOInteractable* Interactable = Cast<IMMOInteractable>(Actor);
+		const float Distance = FVector::Dist2D(Interactable->GetInteractLocation(), GetActorLocation());
+		if (Distance <= Interactable->GetInteractRange() && Distance < BestDistance && Interactable->CanInteract(this))
+		{
+			BestDistance = Distance;
+			Best = Actor;
+		}
+	}
+	return Best;
+}
+
+bool AMMOCharacter::TryInteract(AActor* Target)
+{
+	IMMOInteractable* Interactable = Cast<IMMOInteractable>(Target);
+	if (!Interactable || IsDead())
+	{
+		return false;
+	}
+	if (FVector::Dist2D(Interactable->GetInteractLocation(), GetActorLocation()) > Interactable->GetInteractRange())
+	{
+		ShowPlayerMessage(NSLOCTEXT("MMOItems", "TooFar", "You are too far away."));
+		return false;
+	}
+	if (!Interactable->CanInteract(this))
+	{
+		return false;
+	}
+	Interactable->Interact(this);
+	return true;
 }
 
 void AMMOCharacter::InteractWith(AMMOCreature* Creature)
@@ -766,7 +864,11 @@ void AMMOCharacter::UpdateHoverCursor()
 
 	const AMMOCreature* Hovered = GetCreatureUnderCursor();
 	EMouseCursor::Type Cursor = EMouseCursor::Default;
-	if (Hovered && Hovered->IsLootable())
+	if (GetInteractableUnderCursor())
+	{
+		Cursor = EMouseCursor::Hand;
+	}
+	else if (Hovered && Hovered->IsLootable())
 	{
 		Cursor = EMouseCursor::Hand;
 	}
@@ -784,11 +886,22 @@ void AMMOCharacter::DoInteract()
 		return;
 	}
 
+	// an NPC / object under the cursor wins, then the nearest corpse, then the nearest NPC / object
+	if (AActor* Hovered = GetInteractableUnderCursor())
+	{
+		TryInteract(Hovered);
+		return;
+	}
+
 	bool bTooFar = false;
 	AMMOCreature* Corpse = FindLootableCorpse(bTooFar);
 	if (!Corpse)
 	{
-		if (bTooFar)
+		if (AActor* Nearby = FindNearestInteractable())
+		{
+			TryInteract(Nearby);
+		}
+		else if (bTooFar)
 		{
 			ShowPlayerMessage(NSLOCTEXT("MMOItems", "TooFar", "You are too far away."));
 		}
@@ -814,6 +927,14 @@ void AMMOCharacter::DoToggleCharacter()
 	if (AMMOHUD* HUD = Cast<AMMOHUD>(Cast<APlayerController>(GetController()) ? Cast<APlayerController>(GetController())->GetHUD() : nullptr))
 	{
 		HUD->ToggleCharacter();
+	}
+}
+
+void AMMOCharacter::DoToggleQuestLog()
+{
+	if (AMMOHUD* HUD = Cast<AMMOHUD>(Cast<APlayerController>(GetController()) ? Cast<APlayerController>(GetController())->GetHUD() : nullptr))
+	{
+		HUD->ToggleQuestLog();
 	}
 }
 

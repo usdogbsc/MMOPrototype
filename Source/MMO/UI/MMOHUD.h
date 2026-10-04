@@ -8,6 +8,7 @@
 
 class UMMOHUDWidget;
 class UMMOLootContainerComponent;
+class AMMONPC;
 class USoundBase;
 
 /**
@@ -27,6 +28,9 @@ public:
 	void ToggleCharacter();
 	void OpenLoot(UMMOLootContainerComponent* Container);
 	void CloseLoot();
+	void ToggleQuestLog();
+	void OpenDialogue(AMMONPC* NPC);
+	void CloseDialogue();
 
 	/** Closes every open window. Returns true if anything was open */
 	bool CloseAllWindows();

@@ -39,6 +39,12 @@
 #include "Creatures/MMOGreyWolf.h"
 #include "World/MMODiscoveryZone.h"
 #include "World/MMOExplorationComponent.h"
+#include "NPC/MMONPC.h"
+#include "Quests/MMOQuestDefinition.h"
+#include "Quests/MMOQuestLogComponent.h"
+#include "UI/MMONPCPlateWidget.h"
+#include "UI/MMOQuestWidgets.h"
+#include "Components/WidgetComponent.h"
 #include "Blueprint/UserWidget.h"
 #include "MMO.h"
 
@@ -75,6 +81,7 @@ namespace MMOSelfTest
 		float MinTargetHit = TNumericLimits<float>::Max();
 		int32 FillerAdded = 0;
 		int32 ItemsBeforeDeath = 0;
+		int32 CurrencyMark = 0;
 		TWeakObjectPtr<UUserWidget> TooltipWidget;
 		FDelegateHandle CombatEventHandle;
 		FTSTicker::FDelegateHandle Ticker;
@@ -195,6 +202,42 @@ namespace MMOSelfTest
 		for (TActorIterator<AMMODiscoveryZone> It(World); It; ++It)
 		{
 			if (It->LocationId == Id)
+			{
+				return *It;
+			}
+		}
+		return nullptr;
+	}
+
+	static AMMONPC* FindNPC(UWorld* World, FName Id)
+	{
+		for (TActorIterator<AMMONPC> It(World); It; ++It)
+		{
+			if (It->NPCId == Id)
+			{
+				return *It;
+			}
+		}
+		return nullptr;
+	}
+
+	static bool TrackerHas(const AMMOCharacter* Player, const FString& Line)
+	{
+		return HUDOf(Player)->GetHUDWidget()->GetTrackerLines().Contains(Line);
+	}
+
+	static EMMONPCMarker PlateMarker(const AMMONPC* NPC)
+	{
+		const UWidgetComponent* Plate = NPC->FindComponentByClass<UWidgetComponent>();
+		const UMMONPCPlateWidget* Widget = Plate ? Cast<UMMONPCPlateWidget>(Plate->GetUserWidgetObject()) : nullptr;
+		return Widget ? Widget->GetMarker() : EMMONPCMarker::None;
+	}
+
+	static AMMOCreature* FindLivingCreature(UWorld* World, FName QuestTag)
+	{
+		for (TActorIterator<AMMOCreature> It(World); It; ++It)
+		{
+			if (It->QuestTag == QuestTag && !It->GetHealth()->IsDead())
 			{
 				return *It;
 			}
@@ -909,12 +952,189 @@ namespace MMOSelfTest
 				Check(Progression->GetLevel() == State->LevelMark, TEXT("Level is kept through death"));
 				Check(CountOwned(Player) == State->ItemsBeforeDeath && Equipment->GetEquipped(EMMOEquipmentSlot::MainHand).Item == Greyfang, TEXT("Inventory and equipment are kept through death"));
 				Check(!InCombat(State->Pack[0].Get()), TEXT("Wolves disengage after the player dies"));
-				Finish();
-				return false;
+				NextStep();
 			}
 			else if (Elapsed() > Player->GetRespawnDelay() + 3.0f)
 			{
 				Check(false, TEXT("Player respawned in time"));
+				Finish();
+				return false;
+			}
+			break;
+
+		case 29: // villagers: talk to Warden Hollis (Milestone 4)
+		{
+			AMMONPC* Hollis = FindNPC(World, TEXT("Hollis"));
+			if (!Hollis)
+			{
+				UE_LOG(LogMMO, Display, TEXT("MMO SELFTEST: no villagers in this map, skipping the quest checks"));
+				Finish();
+				return false;
+			}
+			UMMOQuestLogComponent* QuestLog = Player->GetQuestLog();
+			UMMOQuestDefinition* Wolves = UMMOQuestDefinition::FindById(TEXT("WolvesAtTheGate"));
+			UMMOQuestDefinition* Eyes = UMMOQuestDefinition::FindById(TEXT("EyesOnTheWild"));
+			Check(Wolves && Eyes && UMMOQuestDefinition::FindById(TEXT("PeltsForTheHearth")), TEXT("Quest definitions load by id"));
+			if (!Wolves || !Eyes)
+			{
+				Finish();
+				return false;
+			}
+			Check(QuestLog->GetActiveQuests().Num() == 0 && QuestLog->GetQuestState(Wolves) == EMMOQuestState::Available && QuestLog->GetQuestState(Eyes) == EMMOQuestState::Unavailable,
+				TEXT("Quest chain starts with Wolves at the Gate available and its follow-up locked"));
+			Check(Hollis->GetMarker(QuestLog) == EMMONPCMarker::QuestAvailable && PlateMarker(Hollis) == EMMONPCMarker::QuestAvailable, TEXT("Warden Hollis shows a gold ! over his head"));
+
+			PlacePlayerNear(Hollis->GetActorLocation(), 900.0f);
+			Check(!Player->TryInteract(Hollis) && !HUDOf(Player)->GetHUDWidget()->IsDialogueOpen(), TEXT("Talking to a villager requires being close"));
+
+			PlacePlayerNear(Hollis->GetActorLocation(), 220.0f);
+			Check(Player->FindNearestInteractable() == Hollis, TEXT("F finds the villager standing next to the player"));
+			Player->DoInteract();
+			UMMOHUDWidget* Widget = HUDOf(Player)->GetHUDWidget();
+			Check(Widget->GetDialogueNPC() == Hollis && CursorShown(Player), TEXT("F opens a conversation with Warden Hollis"));
+			const TArray<UMMOQuestDefinition*> Offered = Hollis->GetDialogueQuests(QuestLog);
+			Check(Offered.Contains(Wolves) && !Offered.Contains(Eyes), TEXT("Hollis offers Wolves at the Gate (and not the locked follow-up)"));
+			Widget->GetDialogueWindow()->ShowQuest(Wolves);
+			Check(Widget->GetDialogueWindow()->GetShownQuest() == Wolves, TEXT("Choosing the quest shows its offer page"));
+			State->bFlag = false;
+			NextStep();
+			break;
+		}
+
+		case 30: // accept, then look at the quest log and tracker
+			if (!State->bFlag && Elapsed() > 0.6f)
+			{
+				// screenshot the offer page; act on a later frame so the capture shows it
+				Shot(TEXT("8_QuestOffer"));
+				State->bFlag = true;
+			}
+			else if (State->bFlag && Elapsed() > 1.0f)
+			{
+				State->bFlag = false;
+				UMMOQuestLogComponent* QuestLog = Player->GetQuestLog();
+				UMMOQuestDefinition* Wolves = UMMOQuestDefinition::FindById(TEXT("WolvesAtTheGate"));
+				AMMONPC* Hollis = FindNPC(World, TEXT("Hollis"));
+				Check(QuestLog->AcceptQuest(Wolves) == EMMOQuestResult::Success && QuestLog->GetQuestState(Wolves) == EMMOQuestState::Active, TEXT("Accepting adds Wolves at the Gate to the quest log"));
+				HUDOf(Player)->GetHUDWidget()->GetDialogueWindow()->ShowGreeting();
+				Check(Hollis->GetMarker(QuestLog) == EMMONPCMarker::QuestInProgress, TEXT("Hollis's marker turns to a grey ? while the quest is in progress"));
+				Check(TrackerHas(Player, TEXT("Wolves at the Gate")) && TrackerHas(Player, TEXT("Grey Wolves slain: 0/5")), TEXT("Quest tracker shows the quest and 0/5 progress"));
+				HUDOf(Player)->ToggleQuestLog();
+				Check(HUDOf(Player)->GetHUDWidget()->IsQuestLogOpen(), TEXT("L opens the quest log"));
+				NextStep();
+			}
+			break;
+
+		case 31: // kill progress and turn-in
+			if (!State->bFlag && Elapsed() > 0.6f)
+			{
+				Shot(TEXT("9_QuestLog"));
+				State->bFlag = true;
+			}
+			else if (State->bFlag && Elapsed() > 1.0f)
+			{
+				State->bFlag = false;
+				Check(PlateMarker(FindNPC(World, TEXT("Hollis"))) == EMMONPCMarker::QuestInProgress, TEXT("Nameplate marker updates to grey ?"));
+				HUDOf(Player)->CloseAllWindows();
+				Check(!HUDOf(Player)->IsAnyWindowOpen(), TEXT("Esc closes the quest log and conversation"));
+
+				UMMOQuestLogComponent* QuestLog = Player->GetQuestLog();
+				UMMOQuestDefinition* Wolves = UMMOQuestDefinition::FindById(TEXT("WolvesAtTheGate"));
+				AMMONPC* Hollis = FindNPC(World, TEXT("Hollis"));
+
+				AMMOCreature* Prey = FindLivingCreature(World, TEXT("GreyWolf"));
+				AMMOCreature* DenWolf = FindLivingCreature(World, TEXT("DenWolf"));
+				Check(Prey && DenWolf, TEXT("Meadow wolves and den wolves carry their quest tags"));
+				if (Prey)
+				{
+					Prey->GetHealth()->ApplyDamage(100000.0f, Player);
+				}
+				Check(QuestLog->GetObjectiveProgress(Wolves, 0) == 1 && TrackerHas(Player, TEXT("Grey Wolves slain: 1/5")), TEXT("Killing a Grey Wolf advances the quest to 1/5"));
+				if (DenWolf)
+				{
+					DenWolf->GetHealth()->ApplyDamage(100000.0f, Player);
+				}
+				Check(QuestLog->GetObjectiveProgress(Wolves, 0) == 1, TEXT("Other wolves don't count toward the Grey Wolf objective"));
+				for (int32 i = 0; i < 4; ++i)
+				{
+					QuestLog->NotifyKill(TEXT("GreyWolf"));
+				}
+				Check(QuestLog->GetQuestState(Wolves) == EMMOQuestState::ReadyToTurnIn && Hollis->GetMarker(QuestLog) == EMMONPCMarker::QuestReady, TEXT("At 5/5 the quest is ready and Hollis shows a gold ?"));
+				Check(TrackerHas(Player, TEXT("Ready to turn in")), TEXT("Tracker says the quest is ready to turn in"));
+
+				Check(Player->TryInteract(Hollis) && Hollis->GetDialogueQuests(QuestLog).Contains(Wolves), TEXT("Hollis lists the finished quest"));
+				HUDOf(Player)->GetHUDWidget()->GetDialogueWindow()->ShowQuest(Wolves);
+				NextStep();
+			}
+			break;
+
+		case 32: // screenshot the completion page, then turn in
+			if (!State->bFlag && Elapsed() > 0.6f)
+			{
+				Shot(TEXT("10_QuestComplete"));
+				State->bFlag = true;
+			}
+			else if (State->bFlag && Elapsed() > 1.0f)
+			{
+				State->bFlag = false;
+				UMMOQuestLogComponent* QuestLog = Player->GetQuestLog();
+				UMMOQuestDefinition* Wolves = UMMOQuestDefinition::FindById(TEXT("WolvesAtTheGate"));
+				UMMOQuestDefinition* Eyes = UMMOQuestDefinition::FindById(TEXT("EyesOnTheWild"));
+				AMMONPC* Hollis = FindNPC(World, TEXT("Hollis"));
+				State->XPMark = TotalXP(Progression);
+				State->CurrencyMark = Inventory->GetCurrency();
+				Check(QuestLog->TurnInQuest(Wolves) == EMMOQuestResult::Success && QuestLog->GetQuestState(Wolves) == EMMOQuestState::Completed, TEXT("Turning in completes the quest"));
+				Check(TotalXP(Progression) == State->XPMark + Wolves->RewardXP && Inventory->GetCurrency() == State->CurrencyMark + Wolves->RewardCurrency,
+					FString::Printf(TEXT("Turn-in pays %d XP and %d copper"), Wolves->RewardXP, Wolves->RewardCurrency));
+				Check(QuestLog->GetQuestState(Eyes) == EMMOQuestState::Available && Hollis->GetMarker(QuestLog) == EMMONPCMarker::QuestAvailable, TEXT("The follow-up quest unlocks and Hollis offers it"));
+				Check(!TrackerHas(Player, TEXT("Wolves at the Gate")), TEXT("Completed quests leave the tracker"));
+				NextStep();
+			}
+			break;
+
+		case 33: // collect quest with Brenna
+		{
+			AMMONPC* Brenna = FindNPC(World, TEXT("Brenna"));
+			UMMOQuestLogComponent* QuestLog = Player->GetQuestLog();
+			UMMOQuestDefinition* Pelts = UMMOQuestDefinition::FindById(TEXT("PeltsForTheHearth"));
+			UMMOItemDefinition* Pelt = UMMOItemDefinition::FindById(TEXT("WolfPelt"));
+			UMMOItemDefinition* Gloves = UMMOItemDefinition::FindById(TEXT("StitchedWolfhideGloves"));
+			Check(Brenna && Pelts && Pelt && Gloves, TEXT("Brenna, her quest and its items exist"));
+			if (!Brenna || !Pelts || !Pelt || !Gloves)
+			{
+				Finish();
+				return false;
+			}
+
+			PlacePlayerNear(Brenna->GetActorLocation(), 220.0f);
+			Check(Brenna->GetMarker(QuestLog) == EMMONPCMarker::QuestAvailable && Player->TryInteract(Brenna) && HUDOf(Player)->GetHUDWidget()->GetDialogueNPC() == Brenna,
+				TEXT("Brenna the innkeeper has a quest and can be talked to"));
+
+			Inventory->RemoveItem(Pelt, Inventory->CountItem(Pelt));
+			Check(QuestLog->AcceptQuest(Pelts) == EMMOQuestResult::Success && QuestLog->GetObjectiveProgress(Pelts, 0) == 0, TEXT("Accept Pelts for the Hearth (0/4)"));
+			Inventory->AddItem(Pelt, 2, true);
+			Check(QuestLog->GetObjectiveProgress(Pelts, 0) == 2 && TrackerHas(Player, TEXT("Wolf Pelts: 2/4")), TEXT("Picking up pelts advances the collect objective"));
+			Inventory->AddItem(Pelt, 3, true);
+			Check(QuestLog->GetQuestState(Pelts) == EMMOQuestState::ReadyToTurnIn && Brenna->GetMarker(QuestLog) == EMMONPCMarker::QuestReady, TEXT("With 4 pelts the quest is ready"));
+
+			const int32 GlovesBefore = Inventory->CountItem(Gloves);
+			Check(QuestLog->TurnInQuest(Pelts) == EMMOQuestResult::Success, TEXT("Turn in Pelts for the Hearth"));
+			Check(Inventory->CountItem(Pelt) == 1 && Inventory->CountItem(Gloves) == GlovesBefore + 1, TEXT("Turn-in takes exactly 4 pelts and gives the gloves"));
+
+			// equip the reward
+			const int32 GloveSlot = FindSlotOf(Inventory, Gloves);
+			Check(GloveSlot != INDEX_NONE && Player->EquipInventorySlot(GloveSlot) == EMMOEquipResult::Success && Equipment->GetEquipped(EMMOEquipmentSlot::Hands).Item == Gloves,
+				TEXT("Reward gloves can be equipped"));
+
+			// walking away ends the conversation
+			PlacePlayerNear(Brenna->GetActorLocation(), 1500.0f);
+			NextStep();
+			break;
+		}
+
+		case 34:
+			if (Elapsed() > 0.5f)
+			{
+				Check(!HUDOf(Player)->GetHUDWidget()->IsDialogueOpen(), TEXT("Walking away closes the conversation"));
 				Finish();
 				return false;
 			}

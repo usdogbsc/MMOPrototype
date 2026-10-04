@@ -21,6 +21,9 @@ class UMMOLootWindowWidget;
 class UMMOLootContainerComponent;
 class UMMOItemDefinition;
 class AMMODiscoveryZone;
+class AMMONPC;
+class UMMODialogueWindowWidget;
+class UMMOQuestLogWindowWidget;
 
 /**
  *  Root MMO HUD: player frame, target frame, Basic Attack hotbar slot, floating combat text, banners and screen flashes.
@@ -51,6 +54,20 @@ public:
 	bool IsCharacterOpen() const;
 	bool IsLootOpen() const;
 	UMMOLootContainerComponent* GetOpenLoot() const;
+
+	void OpenDialogue(AMMONPC* NPC);
+	void CloseDialogue();
+	bool IsDialogueOpen() const;
+	AMMONPC* GetDialogueNPC() const;
+
+	void SetQuestLogOpen(bool bOpen);
+	bool IsQuestLogOpen() const;
+
+	UMMODialogueWindowWidget* GetDialogueWindow() const { return DialogueWindow; }
+	UMMOQuestLogWindowWidget* GetQuestLogWindow() const { return QuestLogWindow; }
+
+	/** Lines currently shown in the quest tracker (for tests) */
+	TArray<FString> GetTrackerLines() const;
 
 	UMMOInventoryWindowWidget* GetInventoryWindow() const { return InventoryWindow; }
 	UMMOCharacterWindowWidget* GetCharacterWindow() const { return CharacterWindow; }
@@ -121,6 +138,22 @@ protected:
 
 	UPROPERTY(BlueprintReadOnly, Category="HUD", meta=(BindWidgetOptional))
 	TObjectPtr<UMMOLootWindowWidget> LootWindow;
+
+	UPROPERTY(BlueprintReadOnly, Category="HUD", meta=(BindWidgetOptional))
+	TObjectPtr<UMMODialogueWindowWidget> DialogueWindow;
+
+	UPROPERTY(BlueprintReadOnly, Category="HUD", meta=(BindWidgetOptional))
+	TObjectPtr<UMMOQuestLogWindowWidget> QuestLogWindow;
+
+	/** Accepted quests and their objectives, right side */
+	UPROPERTY(BlueprintReadOnly, Category="HUD", meta=(BindWidgetOptional))
+	TObjectPtr<UVerticalBox> QuestTracker;
+
+	/** Quest progress / completion notices, upper-center */
+	UPROPERTY(BlueprintReadOnly, Category="HUD", meta=(BindWidgetOptional))
+	TObjectPtr<UTextBlock> QuestToastText;
+
+	float QuestToastTime = 0.0f;
 
 	/** Recent pickups, bottom-right */
 	UPROPERTY(BlueprintReadOnly, Category="HUD", meta=(BindWidgetOptional))
@@ -206,6 +239,14 @@ protected:
 
 	UFUNCTION()
 	void HandleLocationDiscovered(AMMODiscoveryZone* Zone, int32 XPAwarded);
+
+	UFUNCTION()
+	void HandleQuestLogChanged();
+
+	UFUNCTION()
+	void HandleQuestMessage(const FText& Message, bool bImportant);
+
+	void RebuildTracker();
 
 	void ShowZoneBanner(const FString& Title, const FString& Subtitle, const FLinearColor& Color, float Duration);
 

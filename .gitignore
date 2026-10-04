@@ -34,3 +34,5 @@ Thumbs.db
 
 # VS Code
 .vscode/
+# Python bytecode from editor scripts
+__pycache__/

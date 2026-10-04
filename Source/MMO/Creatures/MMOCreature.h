@@ -114,6 +114,10 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Creature|Rewards", meta=(ClampMin=0))
 	int32 XPReward = 40;
 
+	/** Id that kill quests count (e.g. GreyWolf, DenWolf). Defaults to the creature type */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Creature|Rewards")
+	FName QuestTag;
+
 	/** What this creature can drop */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Creature|Rewards")
 	TSoftObjectPtr<UMMOLootTable> LootTable;

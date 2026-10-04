@@ -17,6 +17,7 @@ AMMODireWolf::AMMODireWolf()
 	LeashRange = 2600.0f;
 	ChaseSpeed = 440.0f;
 	XPReward = 130;
+	QuestTag = TEXT("DireWolf");
 	RespawnDelay = 25.0f;
 	WanderRadius = 700.0f;
 	WanderSpeed = 140.0f;

@@ -414,12 +414,13 @@ def main():
             f.write("\n".join(LOG))
 
 
-try:
-    main()
-except Exception as error:
-    log("ERROR: %s" % error)
-    out = os.environ.get("MMO_SETUP_LOG")
-    if out:
-        with open(out, "w") as f:
-            f.write("\n".join(LOG))
-    raise
+if __name__ == "__main__":
+    try:
+        main()
+    except Exception as error:
+        log("ERROR: %s" % error)
+        out = os.environ.get("MMO_SETUP_LOG")
+        if out:
+            with open(out, "w") as f:
+                f.write("\n".join(LOG))
+        raise

@@ -2,8 +2,8 @@
 
 // Development-only visual tour of the Thornwick zone:
 //   mmo.tour        teleports the player through the zone's key viewpoints, saving a screenshot at each
-//   mmo.tour quit   ...and exits when done
-//   mmo.goto <Name> teleports to one viewpoint (Village, Gate, Meadow, Tower, Stones, Woods, Camp, Den, Waterfall, Hollow, Mine)
+//   mmo.tour quit   ...and exits when done (add viewpoint names, e.g. "mmo.tour Hollis Doran", to visit only those)
+//   mmo.goto <Name> teleports to one viewpoint (Village, Gate, Meadow, Tower, Stones, Woods, Camp, Den, Waterfall, Hollow, Mine, Overview, Hollis, Brenna, Doran, Pell)
 // The player is invulnerable during the tour.
 
 #include "CoreMinimal.h"
@@ -45,12 +45,18 @@ namespace MMOZoneTour
 		{ TEXT("Hollow"),    19450.0f,  4950.0f,    40.0f, -12.0f,  900.0f },
 		{ TEXT("Mine"),      19900.0f, -1200.0f,   -15.0f,  -8.0f,  800.0f },
 		{ TEXT("Overview"),   -400.0f,   400.0f,     5.0f, -32.0f, 1100.0f },
+		{ TEXT("Hollis"),     3100.0f,   150.0f,  -152.0f,  -8.0f,  450.0f },
+		{ TEXT("Brenna"),       -1.0f,  -130.0f,  -156.0f,  -8.0f,  450.0f },
+		{ TEXT("Doran"),      1180.0f,   178.0f,    11.0f,  -8.0f,  450.0f },
+		{ TEXT("Pell"),        389.0f,   -94.0f,   -46.0f,  -8.0f,  450.0f },
 	};
 
 	struct FTour
 	{
 		TWeakObjectPtr<UWorld> World;
 		int32 Index = 0;
+		/** Viewpoint names to visit (empty = all) */
+		TArray<FString> Only;
 		double StepStart = 0.0;
 		bool bShot = false;
 		bool bQuit = false;
@@ -101,6 +107,11 @@ namespace MMOZoneTour
 		}
 
 		const FViewpoint& View = Viewpoints[Tour->Index];
+		if (Tour->Only.Num() > 0 && !Tour->Only.Contains(View.Name))
+		{
+			++Tour->Index;
+			return true;
+		}
 		if (Tour->StepStart == 0.0)
 		{
 			GoTo(World, View);
@@ -134,6 +145,13 @@ namespace MMOZoneTour
 		Tour = MakeUnique<FTour>();
 		Tour->World = World;
 		Tour->bQuit = Args.Contains(TEXT("quit"));
+		for (const FViewpoint& View : Viewpoints)
+		{
+			if (Args.Contains(View.Name))
+			{
+				Tour->Only.Add(View.Name);
+			}
+		}
 		Tour->Ticker = FTSTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateStatic(&Tick), 0.0f);
 	}
 
@@ -147,7 +165,7 @@ namespace MMOZoneTour
 				return;
 			}
 		}
-		UE_LOG(LogMMO, Warning, TEXT("mmo.goto: unknown place. Try Village, Square, Gate, Meadow, Tower, Stones, Wagon, Woods, Camp, Den, Waterfall, Hollow, Mine"));
+		UE_LOG(LogMMO, Warning, TEXT("mmo.goto: unknown place. Try Village, Square, Gate, Meadow, Tower, Stones, Wagon, Woods, Camp, Den, Waterfall, Hollow, Mine, Overview, Hollis, Brenna, Doran, Pell"));
 	}
 }
 

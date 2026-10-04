@@ -5,6 +5,10 @@
 #include "UI/MMOCharacterWindowWidget.h"
 #include "UI/MMOInventoryWindowWidget.h"
 #include "UI/MMOLootWindowWidget.h"
+#include "UI/MMOQuestWidgets.h"
+#include "Quests/MMOQuestDefinition.h"
+#include "Quests/MMOQuestLogComponent.h"
+#include "NPC/MMONPC.h"
 #include "Items/MMOInventoryComponent.h"
 #include "Items/MMOItemDefinition.h"
 #include "Items/MMOLootContainerComponent.h"
@@ -94,7 +98,7 @@ void UMMOHUDWidget::BuildDefaultLayout()
 	TargetFrame = WidgetTree->ConstructWidget<UMMOUnitFrameWidget>(FrameClass, TEXT("TargetFrame"));
 	Place(Root, TargetFrame, FAnchors(0.0f, 0.0f), FVector2D::ZeroVector, FVector2D(330.0f, 24.0f));
 
-	UTextBlock* HelpText = MakeText(WidgetTree, TEXT("Left-click: select    Right-click: attack / loot    Hold a mouse button + drag: camera    1: auto attack    F: loot    Tab: next target    B: backpack    C: character    Esc: close / clear"), 11, Colors::TextDim);
+	UTextBlock* HelpText = MakeText(WidgetTree, TEXT("Left-click: select    Right-click: attack / loot    Hold a mouse button + drag: camera    1: auto attack    F: talk / loot    Tab: next target    B: backpack    C: character    L: quest log    Esc: close / clear"), 11, Colors::TextDim);
 	Place(Root, HelpText, FAnchors(0.0f, 0.0f), FVector2D::ZeroVector, FVector2D(26.0f, 122.0f));
 
 	// hotbar, bottom-center
@@ -151,6 +155,14 @@ void UMMOHUDWidget::BuildDefaultLayout()
 	ZoneBox->SetRenderOpacity(0.0f);
 	Place(Root, ZoneBox, FAnchors(0.5f, 0.0f), FVector2D(0.5f, 0.0f), FVector2D(0.0f, 92.0f));
 
+	// quest tracker, right side
+	QuestTracker = WidgetTree->ConstructWidget<UVerticalBox>(UVerticalBox::StaticClass(), TEXT("QuestTracker"));
+	Place(Root, QuestTracker, FAnchors(1.0f, 0.0f), FVector2D(1.0f, 0.0f), FVector2D(-28.0f, 200.0f));
+
+	QuestToastText = MakeText(WidgetTree, TEXT(""), 18, FLinearColor(1.0f, 0.86f, 0.35f), true, ETextJustify::Center);
+	QuestToastText->SetRenderOpacity(0.0f);
+	Place(Root, QuestToastText, FAnchors(0.5f, 0.0f), FVector2D(0.5f, 0.0f), FVector2D(0.0f, 140.0f));
+
 	// everything above is display-only
 	for (UWidget* Child : Root->GetAllChildren())
 	{
@@ -167,7 +179,13 @@ void UMMOHUDWidget::BuildDefaultLayout()
 	LootWindow = WidgetTree->ConstructWidget<UMMOLootWindowWidget>(UMMOLootWindowWidget::StaticClass(), TEXT("LootWindow"));
 	Place(Root, LootWindow, FAnchors(0.5f, 0.5f), FVector2D(1.0f, 0.5f), FVector2D(-90.0f, 0.0f));
 
-	for (UWidget* Window : { static_cast<UWidget*>(CharacterWindow), static_cast<UWidget*>(InventoryWindow), static_cast<UWidget*>(LootWindow) })
+	DialogueWindow = WidgetTree->ConstructWidget<UMMODialogueWindowWidget>(UMMODialogueWindowWidget::StaticClass(), TEXT("DialogueWindow"));
+	Place(Root, DialogueWindow, FAnchors(0.0f, 0.5f), FVector2D(0.0f, 0.5f), FVector2D(24.0f, 20.0f));
+
+	QuestLogWindow = WidgetTree->ConstructWidget<UMMOQuestLogWindowWidget>(UMMOQuestLogWindowWidget::StaticClass(), TEXT("QuestLogWindow"));
+	Place(Root, QuestLogWindow, FAnchors(0.5f, 0.5f), FVector2D(0.5f, 0.5f), FVector2D(0.0f, 0.0f));
+
+	for (UWidget* Window : { static_cast<UWidget*>(CharacterWindow), static_cast<UWidget*>(InventoryWindow), static_cast<UWidget*>(LootWindow), static_cast<UWidget*>(DialogueWindow), static_cast<UWidget*>(QuestLogWindow) })
 	{
 		Window->SetVisibility(ESlateVisibility::Collapsed);
 	}
@@ -202,6 +220,14 @@ void UMMOHUDWidget::NativeConstruct()
 	if (LootWindow)
 	{
 		LootWindow->OnCloseRequested.BindLambda([this]() { CloseWindowFromWidget(LootWindow); });
+	}
+	if (DialogueWindow)
+	{
+		DialogueWindow->OnCloseRequested.BindLambda([this]() { CloseWindowFromWidget(DialogueWindow); });
+	}
+	if (QuestLogWindow)
+	{
+		QuestLogWindow->OnCloseRequested.BindLambda([this]() { CloseWindowFromWidget(QuestLogWindow); });
 	}
 }
 
@@ -290,11 +316,145 @@ UMMOLootContainerComponent* UMMOHUDWidget::GetOpenLoot() const
 	return IsLootOpen() ? LootWindow->GetContainer() : nullptr;
 }
 
+void UMMOHUDWidget::OpenDialogue(AMMONPC* NPC)
+{
+	if (DialogueWindow && NPC)
+	{
+		DialogueWindow->Open(BoundCharacter.Get(), NPC);
+		DialogueWindow->SetVisibility(ESlateVisibility::Visible);
+	}
+}
+
+void UMMOHUDWidget::CloseDialogue()
+{
+	if (DialogueWindow)
+	{
+		DialogueWindow->Close();
+		DialogueWindow->SetVisibility(ESlateVisibility::Collapsed);
+	}
+}
+
+bool UMMOHUDWidget::IsDialogueOpen() const
+{
+	return DialogueWindow && DialogueWindow->GetVisibility() == ESlateVisibility::Visible;
+}
+
+AMMONPC* UMMOHUDWidget::GetDialogueNPC() const
+{
+	return IsDialogueOpen() ? DialogueWindow->GetNPC() : nullptr;
+}
+
+void UMMOHUDWidget::SetQuestLogOpen(bool bOpen)
+{
+	if (QuestLogWindow)
+	{
+		if (bOpen)
+		{
+			QuestLogWindow->Init(BoundCharacter.Get());
+		}
+		QuestLogWindow->SetVisibility(bOpen ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
+	}
+}
+
+bool UMMOHUDWidget::IsQuestLogOpen() const
+{
+	return QuestLogWindow && QuestLogWindow->GetVisibility() == ESlateVisibility::Visible;
+}
+
+void UMMOHUDWidget::HandleQuestLogChanged()
+{
+	RebuildTracker();
+
+	// keep an open conversation in step with quest changes (e.g. an objective completing mid-chat)
+	if (IsDialogueOpen() && !DialogueWindow->GetShownQuest())
+	{
+		DialogueWindow->ShowGreeting();
+	}
+}
+
+void UMMOHUDWidget::HandleQuestMessage(const FText& Message, bool bImportant)
+{
+	if (QuestToastText)
+	{
+		QuestToastText->SetText(Message);
+		QuestToastText->SetFont(MMOUI::Font(bImportant ? 22 : 17, true));
+		QuestToastText->SetColorAndOpacity(FSlateColor(bImportant ? MMOUI::Colors::Gold : FLinearColor(1.0f, 0.92f, 0.7f)));
+	}
+	QuestToastTime = bImportant ? 3.5f : 2.5f;
+}
+
+void UMMOHUDWidget::RebuildTracker()
+{
+	if (!QuestTracker || !WidgetTree)
+	{
+		return;
+	}
+	QuestTracker->ClearChildren();
+
+	const AMMOCharacter* Character = BoundCharacter.Get();
+	const UMMOQuestLogComponent* Log = Character ? Character->GetQuestLog() : nullptr;
+	if (!Log || Log->GetActiveQuests().Num() == 0)
+	{
+		return;
+	}
+
+	static const FLinearColor DoneColor(0.55f, 0.85f, 0.45f);
+	auto AddLine = [this](const FString& Text, int32 Size, const FLinearColor& Color, bool bBold, float Top)
+	{
+		UVerticalBoxSlot* LineSlot = QuestTracker->AddChildToVerticalBox(MMOUI::MakeText(WidgetTree, Text, Size, Color, bBold, ETextJustify::Right));
+		LineSlot->SetHorizontalAlignment(HAlign_Right);
+		LineSlot->SetPadding(FMargin(0.0f, Top, 0.0f, 0.0f));
+	};
+
+	AddLine(TEXT("Quests"), 15, MMOUI::Colors::Gold, true, 0.0f);
+	for (const FMMOQuestProgress& Progress : Log->GetActiveQuests())
+	{
+		const UMMOQuestDefinition* Quest = Progress.Quest;
+		if (!Quest)
+		{
+			continue;
+		}
+		const bool bReady = Log->GetQuestState(Quest) == EMMOQuestState::ReadyToTurnIn;
+		AddLine(Quest->Title.ToString(), 14, FLinearColor(1.0f, 0.82f, 0.3f), true, 6.0f);
+		if (bReady)
+		{
+			AddLine(TEXT("Ready to turn in"), 12, DoneColor, false, 0.0f);
+			continue;
+		}
+		for (int32 i = 0; i < Quest->Objectives.Num(); ++i)
+		{
+			const FMMOQuestObjective& Objective = Quest->Objectives[i];
+			const int32 Have = Log->GetObjectiveProgress(Quest, i);
+			AddLine(FString::Printf(TEXT("%s: %d/%d"), *Objective.Description.ToString(), Have, Objective.Count), 12, Have >= Objective.Count ? DoneColor : FLinearColor(0.9f, 0.9f, 0.9f), false, 0.0f);
+		}
+	}
+}
+
+TArray<FString> UMMOHUDWidget::GetTrackerLines() const
+{
+	TArray<FString> Lines;
+	if (QuestTracker)
+	{
+		for (UWidget* Child : QuestTracker->GetAllChildren())
+		{
+			if (const UTextBlock* Text = Cast<UTextBlock>(Child))
+			{
+				Lines.Add(Text->GetText().ToString());
+			}
+		}
+	}
+	return Lines;
+}
+
 void UMMOHUDWidget::CloseWindowFromWidget(UWidget* Window)
 {
 	if (Window == LootWindow)
 	{
 		CloseLoot();
+	}
+	else if (Window == DialogueWindow)
+	{
+		CloseDialogue();
 	}
 	else if (Window)
 	{
@@ -349,6 +509,12 @@ void UMMOHUDWidget::UpdateLootFeed(float DeltaSeconds)
 	{
 		ZoneBannerTime = FMath::Max(0.0f, ZoneBannerTime - DeltaSeconds);
 		ZoneTitleText->GetParent()->SetRenderOpacity(FMath::Min(1.0f, ZoneBannerTime / 0.8f));
+	}
+
+	if (QuestToastText)
+	{
+		QuestToastTime = FMath::Max(0.0f, QuestToastTime - DeltaSeconds);
+		QuestToastText->SetRenderOpacity(FMath::Min(1.0f, QuestToastTime / 0.6f));
 	}
 
 	if (RareLootBanner)
@@ -445,6 +611,9 @@ void UMMOHUDWidget::BindToCharacter(AMMOCharacter* Character)
 	Character->OnPlayerMessage.AddDynamic(this, &UMMOHUDWidget::HandleCombatError);
 	Character->GetExploration()->OnZoneChanged.AddDynamic(this, &UMMOHUDWidget::HandleZoneChanged);
 	Character->GetExploration()->OnLocationDiscovered.AddDynamic(this, &UMMOHUDWidget::HandleLocationDiscovered);
+	Character->GetQuestLog()->OnQuestLogChanged.AddDynamic(this, &UMMOHUDWidget::HandleQuestLogChanged);
+	Character->GetQuestLog()->OnQuestMessage.AddDynamic(this, &UMMOHUDWidget::HandleQuestMessage);
+	RebuildTracker();
 	if (AMMODiscoveryZone* Zone = Character->GetExploration()->GetCurrentZone())
 	{
 		HandleZoneChanged(Zone);
@@ -473,6 +642,8 @@ void UMMOHUDWidget::UnbindFromCharacter()
 		Character->OnPlayerMessage.RemoveAll(this);
 		Character->GetExploration()->OnZoneChanged.RemoveAll(this);
 		Character->GetExploration()->OnLocationDiscovered.RemoveAll(this);
+		Character->GetQuestLog()->OnQuestLogChanged.RemoveAll(this);
+		Character->GetQuestLog()->OnQuestMessage.RemoveAll(this);
 	}
 	BoundCharacter.Reset();
 }

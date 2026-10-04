@@ -1017,11 +1017,84 @@ def build_creatures():
     for i, (x, y) in enumerate(WOODS_SINGLES):
         wolf(x, y, level=2, health=75, damage=7, xp=50, wander=650, label="GreyWolf_Greywood_%d" % i, folder="Creatures/Greywood")
     for i, (x, y) in enumerate(DEN_WOLVES):
-        wolf(x, y, level=3, health=90, damage=8, xp=60, wander=250, label="GreyWolf_Den_%d" % i, folder="Creatures/HowlingDen")
+        den = wolf(x, y, level=3, health=90, damage=8, xp=60, wander=250, label="GreyWolf_Den_%d" % i, folder="Creatures/HowlingDen")
+        den.set_editor_property("display_name", "Den Wolf")
+        den.set_editor_property("quest_tag", "DenWolf")
     wolf(*HOLLOW["escort"], level=3, health=90, damage=8, xp=60, wander=500, label="GreyWolf_Fanghollow", folder="Creatures/Fanghollow")
     wolf(*HOLLOW["dire"], cls=unreal.MMODireWolf, label="DireWolf_Fanghollow", folder="Creatures/Fanghollow")
     wolf(*MINE_GUARD, level=2, health=75, damage=7, xp=50, wander=500, label="GreyWolf_Mine", folder="Creatures/Mine")
     log("Creatures placed: %d" % (len(WOLF_SPOTS)))
+
+
+# =====================================================================================================================
+# Villagers (Milestone 4)
+# =====================================================================================================================
+
+def quest(quest_id):
+    path = "/Game/MMO/Quests/DA_Quest_" + quest_id
+    if not unreal.EditorAssetLibrary.does_asset_exist(path):
+        log("WARNING: missing quest " + path)
+        return None
+    return unreal.load_asset(path)
+
+
+def facing_point(x, y, tx, ty):
+    return math.degrees(math.atan2(ty - y, tx - x))
+
+
+NPCS = [
+    dict(id="Hollis", name="Warden Hollis", title="Village Warden", at=(2700, -60), look=(3000, 150),
+         tints=[(0.16, 0.1, 0.05), (0.04, 0.16, 0.05)],
+         greeting="Keep your blade close, friend. The road east has turned dangerous, and Thornwick has more trouble than hands to deal with it.",
+         quests=["WolvesAtTheGate", "EyesOnTheWild", "TheHowlingDen"],
+         hat=(CYL, "cloth_green", (0, 0, 92), (0.3, 0.3, 0.12))),
+    dict(id="Brenna", name="Brenna Ashdown", title="Innkeeper", inn=(900, 120), body="Quinn",
+         tints=[(0.35, 0.05, 0.04), (0.6, 0.52, 0.36)],
+         greeting="Welcome to the Thornfire Inn! Warm hearth, cold cider, and a bed that won't bite. Wolves are another matter.",
+         quests=["PeltsForTheHearth"], hat=(SPHERE, "cloth_cream", (0, 0, 86), (0.27, 0.27, 0.16))),
+    dict(id="Doran", name="Doran Ironmantle", title="Blacksmith", forge=(280, -20),
+         tints=[(0.05, 0.05, 0.06), (0.2, 0.1, 0.04)],
+         greeting="Mind the sparks. If it's steel you're after, I'm the only anvil between here and the mountains.",
+         quests=["FangsForTheForge", "TheBeastOfFanghollow"], hat=(CYL, "ash", (0, 0, 90), (0.29, 0.29, 0.1))),
+    dict(id="Pell", name="Old Pell", title="Retired Miner", at=(700, -420), look=(300, 0),
+         tints=[(0.12, 0.09, 0.06), (0.1, 0.13, 0.22)],
+         greeting="Forty years I swung a pick in the Rustvein, east past the Greywood. They boarded it up after the deep tunnels went "
+                  "quiet... and then started making noises. Don't you go poking about in there. Not yet, anyway.",
+         quests=[], hat=(CYL, "hay", (0, 0, 84), (0.55, 0.55, 0.05))),
+]
+
+
+def build_npcs():
+    plaza = (300, 0)
+    inn = Frame(-1100, -900, facing_point(-1100, -900, *plaza))
+    forge = Frame(1900, 300, facing_point(1900, 300, *plaza))
+    for spec in NPCS:
+        if "inn" in spec:
+            x, y, _ = inn.at(spec["inn"][0], spec["inn"][1], 0)
+            yaw = inn.yaw
+        elif "forge" in spec:
+            x, y, _ = forge.at(spec["forge"][0], spec["forge"][1], 0)
+            yaw = forge.yaw
+        else:
+            x, y = spec["at"]
+            yaw = facing_point(x, y, *spec["look"])
+        actor = ACTORS.spawn_actor_from_class(unreal.MMONPC, unreal.Vector(x, y, ground(x, y) + 100), unreal.Rotator(0, 0, yaw))
+        actor.set_actor_label("NPC_" + spec["id"])
+        actor.set_folder_path("Village/NPCs")
+        actor.set_editor_property("npc_id", spec["id"])
+        actor.set_editor_property("display_name", spec["name"])
+        actor.set_editor_property("title", spec["title"])
+        actor.set_editor_property("greeting", spec["greeting"])
+        actor.set_editor_property("quests", [q for q in (quest(qid) for qid in spec["quests"]) if q])
+        if spec.get("body") == "Quinn":
+            actor.set_editor_property("body_mesh", unreal.load_asset("/Game/Characters/Mannequins/Meshes/SKM_Quinn_Simple"))
+        # slot 0 = head/legs, slot 1 = torso
+        actor.set_editor_property("body_tints", [unreal.LinearColor(c[0], c[1], c[2], 1.0) for c in spec["tints"]])
+        mesh, mat, offset, scale = spec["hat"]
+        actor.set_editor_property("accessory_mesh", mesh)
+        actor.set_editor_property("accessory_material", MATS[mat])
+        actor.set_editor_property("accessory_transform", unreal.Transform(unreal.Vector(*offset), unreal.Rotator(0, 0, 0), unreal.Vector(*scale)))
+        log("NPC %s at (%d, %d)" % (spec["id"], x, y))
 
 
 ZONES = [
@@ -1082,6 +1155,7 @@ def main():
     build_landmarks()
     build_vegetation()
     build_creatures()
+    build_npcs()
     build_zones()
     build_navigation_and_start()
 
