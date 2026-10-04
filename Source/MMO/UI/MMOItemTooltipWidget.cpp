@@ -98,6 +98,26 @@ void UMMOItemTooltipWidget::SetItem(const FMMOItemStack& Stack, const FMMOItemSt
 		AddLine(Stats[i], 13, FLinearColor::White, false, i == 0 ? 6.0f : 0.0f);
 	}
 
+	// consumables: what using it does (green, like most MMOs)
+	if (Item->IsUsable())
+	{
+		const FLinearColor UseColor(0.3f, 0.95f, 0.35f);
+		if (Item->HealAmount > 0.0f)
+		{
+			AddLine(FString::Printf(TEXT("Use: Restores %d health."), FMath::RoundToInt(Item->HealAmount)), 12, UseColor, false, 6.0f);
+		}
+		if (Item->HealOverTime > 0.0f)
+		{
+			AddLine(FString::Printf(TEXT("Use: Restores %d health over %d sec. Must remain out of combat; taking damage stops it."),
+				FMath::RoundToInt(Item->HealOverTime), FMath::RoundToInt(Item->EffectDuration)), 12, UseColor, false, 6.0f);
+		}
+		if (Item->Cooldown > 0.0f)
+		{
+			const FString Time = Item->Cooldown >= 60.0f ? FString::Printf(TEXT("%d min"), FMath::RoundToInt(Item->Cooldown / 60.0f)) : FString::Printf(TEXT("%d sec"), FMath::RoundToInt(Item->Cooldown));
+			AddLine(FString::Printf(TEXT("Cooldown: %s"), *Time), 11, MMOUI::Colors::TextDim);
+		}
+	}
+
 	AddLine(Item->Description.ToString(), 12, FLinearColor(0.88f, 0.86f, 0.8f), false, 6.0f);
 	AddLine(Item->FlavorText.ToString(), 12, FLinearColor(0.95f, 0.78f, 0.45f), false, 4.0f);
 

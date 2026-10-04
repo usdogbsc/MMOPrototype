@@ -9,6 +9,8 @@
 #include "Items/MMOItemDefinition.h"
 #include "Quests/MMOQuestDefinition.h"
 #include "Quests/MMOQuestLogComponent.h"
+#include "UI/MMOHUD.h"
+#include "GameFramework/PlayerController.h"
 #include "Blueprint/WidgetTree.h"
 #include "Components/Button.h"
 #include "Components/HorizontalBox.h"
@@ -162,6 +164,19 @@ void UMMODialogueWindowWidget::ShowGreeting()
 		const FLinearColor Color = bActive ? FLinearColor(0.7f, 0.7f, 0.7f) : MMOUI::Colors::Gold;
 		TWeakObjectPtr<UMMOQuestDefinition> WeakQuest = Quest;
 		AddButton(Prefix + Quest->Title.ToString() + Suffix, Color, [this, WeakQuest]() { ShowQuest(WeakQuest.Get()); }, true);
+	}
+
+	if (NPC->IsVendor())
+	{
+		AddButton(TEXT("Let me browse your goods."), FLinearColor(0.75f, 0.9f, 1.0f), [this]()
+		{
+			APlayerController* PC = Character.IsValid() ? Cast<APlayerController>(Character->GetController()) : nullptr;
+			AMMOHUD* HUD = PC ? Cast<AMMOHUD>(PC->GetHUD()) : nullptr;
+			if (HUD && NPC.IsValid())
+			{
+				HUD->OpenVendor(NPC.Get());
+			}
+		}, true);
 	}
 
 	AddButton(TEXT("Goodbye"), FLinearColor::White, [this]() { HandleClose(); });

@@ -275,6 +275,17 @@ void UMMOInventoryComponent::ClearInventory()
 	BroadcastChanged();
 }
 
+bool UMMOInventoryComponent::SpendCurrency(int32 Amount)
+{
+	if (Amount < 0 || Currency < Amount)
+	{
+		return false;
+	}
+	Currency -= Amount;
+	BroadcastChanged();
+	return true;
+}
+
 void UMMOInventoryComponent::SetCurrency(int32 Amount)
 {
 	Currency = FMath::Max(0, Amount);

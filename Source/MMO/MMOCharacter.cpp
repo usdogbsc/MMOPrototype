@@ -26,6 +26,9 @@
 #include "World/MMOExplorationComponent.h"
 #include "World/MMOInteractable.h"
 #include "Quests/MMOQuestLogComponent.h"
+#include "Combat/MMOCooldownComponent.h"
+#include "Items/MMOActionBarComponent.h"
+#include "NPC/MMONPC.h"
 #include "Save/MMOSaveSubsystem.h"
 #include "Engine/GameInstance.h"
 #include "Components/StaticMeshComponent.h"
@@ -52,6 +55,8 @@ namespace MMOCharacterSounds
 	static const FName Coin(TEXT("Coin"));
 	static const FName Equip(TEXT("Equip"));
 	static const FName Error(TEXT("Error"));
+	static const FName Drink(TEXT("Drink"));
+	static const FName Eat(TEXT("Eat"));
 
 	static TSoftObjectPtr<USoundBase> Default(const TCHAR* AssetName)
 	{
@@ -106,6 +111,8 @@ AMMOCharacter::AMMOCharacter()
 	Equipment = CreateDefaultSubobject<UMMOEquipmentComponent>(TEXT("Equipment"));
 	Exploration = CreateDefaultSubobject<UMMOExplorationComponent>(TEXT("Exploration"));
 	QuestLog = CreateDefaultSubobject<UMMOQuestLogComponent>(TEXT("QuestLog"));
+	Cooldowns = CreateDefaultSubobject<UMMOCooldownComponent>(TEXT("Cooldowns"));
+	ActionBar = CreateDefaultSubobject<UMMOActionBarComponent>(TEXT("ActionBar"));
 
 	MainHandMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("MainHandMesh"));
 	MainHandMesh->SetupAttachment(GetMesh(), MainHandSocket);
@@ -125,6 +132,8 @@ AMMOCharacter::AMMOCharacter()
 	CoinSound = MMOCharacterSounds::Default(TEXT("S_MMO_Coins"));
 	EquipSound = MMOCharacterSounds::Default(TEXT("S_MMO_Equip"));
 	ErrorSound = MMOCharacterSounds::Default(TEXT("S_MMO_Error"));
+	DrinkSound = MMOCharacterSounds::Default(TEXT("S_MMO_Drink"));
+	EatSound = MMOCharacterSounds::Default(TEXT("S_MMO_Eat"));
 	MeleeImpactEffect = TSoftObjectPtr<UNiagaraSystem>(FSoftObjectPath(TEXT("/Game/Variant_Combat/VFX/NS_Damage.NS_Damage")));
 	MeleeImpactCameraShake = TSoftClassPtr<UCameraShakeBase>(FSoftObjectPath(TEXT("/Game/Variant_Combat/Blueprints/BP_CameraShake_Hit_Enemy.BP_CameraShake_Hit_Enemy_C")));
 	HurtCameraShake = TSoftClassPtr<UCameraShakeBase>(FSoftObjectPath(TEXT("/Game/Variant_Combat/Blueprints/BP_CameraShake_Hit_Player.BP_CameraShake_Hit_Player_C")));
@@ -197,6 +206,8 @@ void AMMOCharacter::BeginPlay()
 	LoadedSounds.Add(MMOCharacterSounds::Coin, CoinSound.LoadSynchronous());
 	LoadedSounds.Add(MMOCharacterSounds::Equip, EquipSound.LoadSynchronous());
 	LoadedSounds.Add(MMOCharacterSounds::Error, ErrorSound.LoadSynchronous());
+	LoadedSounds.Add(MMOCharacterSounds::Drink, DrinkSound.LoadSynchronous());
+	LoadedSounds.Add(MMOCharacterSounds::Eat, EatSound.LoadSynchronous());
 	LoadedMeleeImpactEffect = MeleeImpactEffect.LoadSynchronous();
 	LoadedMeleeImpactCameraShake = MeleeImpactCameraShake.LoadSynchronous();
 	LoadedHurtCameraShake = HurtCameraShake.LoadSynchronous();
@@ -241,6 +252,10 @@ void AMMOCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputCompon
 		EnhancedInputComponent->BindAction(InventoryAction, ETriggerEvent::Started, this, &AMMOCharacter::DoToggleInventory);
 		EnhancedInputComponent->BindAction(CharacterAction, ETriggerEvent::Started, this, &AMMOCharacter::DoToggleCharacter);
 		EnhancedInputComponent->BindAction(QuestLogAction, ETriggerEvent::Started, this, &AMMOCharacter::DoToggleQuestLog);
+		for (int32 Index = 0; Index < ActionSlotActions.Num(); ++Index)
+		{
+			EnhancedInputComponent->BindActionValueLambda(ActionSlotActions[Index], ETriggerEvent::Started, [this, Index](const FInputActionValue&) { UseActionSlot(Index); });
+		}
 
 		// Camera zoom
 		EnhancedInputComponent->BindAction(ZoomAction, ETriggerEvent::Triggered, this, &AMMOCharacter::Zoom);
@@ -359,6 +374,19 @@ void AMMOCharacter::CreateDefaultCombatInput()
 	EnsureAction(InventoryAction, TEXT("IA_MMOInventory_Runtime"), EKeys::B, EInputActionValueType::Boolean, EKeys::I);
 	EnsureAction(CharacterAction, TEXT("IA_MMOCharacter_Runtime"), EKeys::C);
 	EnsureAction(QuestLogAction, TEXT("IA_MMOQuestLog_Runtime"), EKeys::L);
+
+	// hotbar keys 2-9
+	static const FKey SlotKeys[] = { EKeys::Two, EKeys::Three, EKeys::Four, EKeys::Five, EKeys::Six, EKeys::Seven, EKeys::Eight, EKeys::Nine };
+	if (ActionSlotActions.Num() != UE_ARRAY_COUNT(SlotKeys))
+	{
+		ActionSlotActions.Reset();
+		for (int32 Index = 0; Index < UE_ARRAY_COUNT(SlotKeys); ++Index)
+		{
+			TObjectPtr<UInputAction> Action;
+			EnsureAction(Action, *FString::Printf(TEXT("IA_MMOActionSlot%d_Runtime"), Index + 2), SlotKeys[Index]);
+			ActionSlotActions.Add(Action);
+		}
+	}
 
 	if (const APlayerController* PC = Cast<APlayerController>(GetController()))
 	{
@@ -489,6 +517,12 @@ void AMMOCharacter::RefreshEquipmentVisuals()
 
 void AMMOCharacter::HandleItemsReceived(UMMOItemDefinition* Item, int32 Quantity)
 {
+	// new potions / food go straight onto the hotbar, like most MMOs
+	if (Item && Item->IsUsable())
+	{
+		ActionBar->AutoPlace(UMMOActionBarComponent::MakeItem(Item->ItemId));
+	}
+
 	PlayPresentationSound(Item && Item->Rarity >= EMMOItemRarity::Rare ? MMOCharacterSounds::RareLoot : MMOCharacterSounds::Loot);
 }
 
@@ -1014,6 +1048,202 @@ void AMMOCharacter::EndPlay(const EEndPlayReason::Type EndPlayReason)
 	Super::EndPlay(EndPlayReason);
 }
 
+bool AMMOCharacter::IsInCombat() const
+{
+	const double Now = GetWorld()->GetTimeSeconds();
+	return Now - FMath::Max(LastDamageTakenTime, Combat->GetLastAttackTime()) < OutOfCombatDelay;
+}
+
+float AMMOCharacter::GetFoodRemaining() const
+{
+	return FMath::Max(0.0f, static_cast<float>(FoodEndTime - GetWorld()->GetTimeSeconds()));
+}
+
+EMMOUseItemResult AMMOCharacter::UseItem(UMMOItemDefinition* Item)
+{
+	if (IsDead())
+	{
+		return EMMOUseItemResult::Dead;
+	}
+	if (!Item || !Item->IsUsable())
+	{
+		return EMMOUseItemResult::NotUsable;
+	}
+	if (Inventory->CountItem(Item) <= 0)
+	{
+		ShowPlayerMessage(FText::Format(NSLOCTEXT("MMOItems", "NoneLeft", "You have no {0} left."), Item->DisplayName));
+		return EMMOUseItemResult::NotInBackpack;
+	}
+	if (!Cooldowns->IsReady(Item->GetCooldownKey()))
+	{
+		ShowPlayerMessage(NSLOCTEXT("MMOItems", "NotReady", "That item is not ready yet."));
+		return EMMOUseItemResult::OnCooldown;
+	}
+	if (!Item->bUsableInCombat && IsInCombat())
+	{
+		ShowPlayerMessage(NSLOCTEXT("MMOItems", "InCombat", "You can't do that while in combat."));
+		return EMMOUseItemResult::InCombat;
+	}
+	if (Health->GetCurrentHealth() >= Health->GetMaxHealth())
+	{
+		ShowPlayerMessage(NSLOCTEXT("MMOItems", "FullHealth", "You are already at full health."));
+		return EMMOUseItemResult::FullHealth;
+	}
+
+	Inventory->RemoveItem(Item, 1);
+	Cooldowns->StartCooldown(Item->GetCooldownKey(), Item->Cooldown);
+	if (Item->HealAmount > 0.0f)
+	{
+		Health->Heal(Item->HealAmount);
+	}
+	if (Item->HealOverTime > 0.0f && Item->EffectDuration > 0.0f)
+	{
+		FoodHealPerSecond = Item->HealOverTime / Item->EffectDuration;
+		FoodEndTime = GetWorld()->GetTimeSeconds() + Item->EffectDuration;
+	}
+	PlayPresentationSound(Item->bUsableInCombat ? MMOCharacterSounds::Drink : MMOCharacterSounds::Eat);
+	UE_LOG(LogMMO, Log, TEXT("Used %s (%d left)"), *Item->DisplayName.ToString(), Inventory->CountItem(Item));
+	return EMMOUseItemResult::Success;
+}
+
+bool AMMOCharacter::UseActionSlot(int32 Index)
+{
+	const FMMOActionSlot& Action = ActionBar->GetSlot(Index);
+	if (Action.Type == EMMOActionType::Item)
+	{
+		return UseItem(UMMOItemDefinition::FindById(Action.Id)) == EMMOUseItemResult::Success;
+	}
+	return false;
+}
+
+void AMMOCharacter::UseOrEquipInventorySlot(int32 SlotIndex)
+{
+	const FMMOItemStack& Stack = Inventory->GetSlot(SlotIndex);
+	if (Stack.IsEmpty())
+	{
+		return;
+	}
+	if (CanTradeWith(ActiveVendor.Get()))
+	{
+		SellInventorySlot(SlotIndex);
+	}
+	else if (Stack.Item->IsUsable())
+	{
+		UseItem(Stack.Item);
+	}
+	else if (Stack.Item->IsEquippable())
+	{
+		EquipInventorySlot(SlotIndex);
+	}
+}
+
+void AMMOCharacter::SetActiveVendor(AMMONPC* Vendor)
+{
+	ActiveVendor = Vendor;
+}
+
+bool AMMOCharacter::CanTradeWith(const AMMONPC* Vendor) const
+{
+	return Vendor && Vendor->IsVendor() && !IsDead() && FVector::Dist2D(Vendor->GetActorLocation(), GetActorLocation()) <= Vendor->GetInteractRange() + 250.0f;
+}
+
+EMMOVendorResult AMMOCharacter::BuyFromVendor(int32 EntryIndex, int32 Quantity)
+{
+	AMMONPC* Vendor = ActiveVendor.Get();
+	if (!CanTradeWith(Vendor))
+	{
+		ShowPlayerMessage(MMOVendor::GetResultText(EMMOVendorResult::TooFar));
+		return EMMOVendorResult::TooFar;
+	}
+	if (!Vendor->VendorStock.IsValidIndex(EntryIndex))
+	{
+		return EMMOVendorResult::InvalidItem;
+	}
+
+	const FMMOVendorEntry& Entry = Vendor->VendorStock[EntryIndex];
+	const EMMOVendorResult Result = MMOVendor::Buy(Inventory, Entry.Item, Entry.GetPrice(), Quantity);
+	if (Result == EMMOVendorResult::Success)
+	{
+		PlayPresentationSound(MMOCharacterSounds::Coin);
+		UE_LOG(LogMMO, Log, TEXT("Bought %d x %s for %s"), Quantity, *Entry.Item->DisplayName.ToString(), *MMOItems::FormatCurrency(Entry.GetPrice() * Quantity));
+	}
+	else
+	{
+		ShowPlayerMessage(MMOVendor::GetResultText(Result));
+	}
+	OnTradeChanged.Broadcast();
+	return Result;
+}
+
+EMMOVendorResult AMMOCharacter::SellInventorySlot(int32 SlotIndex)
+{
+	if (!CanTradeWith(ActiveVendor.Get()))
+	{
+		ShowPlayerMessage(MMOVendor::GetResultText(EMMOVendorResult::TooFar));
+		return EMMOVendorResult::TooFar;
+	}
+
+	FMMOItemStack Sold;
+	int32 Copper = 0;
+	const EMMOVendorResult Result = MMOVendor::Sell(Inventory, SlotIndex, Sold, Copper);
+	if (Result == EMMOVendorResult::Success)
+	{
+		// the merchant keeps the last few sales so mistakes can be undone
+		Buyback.Insert(Sold, 0);
+		if (Buyback.Num() > 6)
+		{
+			Buyback.SetNum(6);
+		}
+		PlayPresentationSound(MMOCharacterSounds::Coin);
+		UE_LOG(LogMMO, Log, TEXT("Sold %d x %s for %s"), Sold.Quantity, *Sold.Item->DisplayName.ToString(), *MMOItems::FormatCurrency(Copper));
+	}
+	else
+	{
+		ShowPlayerMessage(MMOVendor::GetResultText(Result));
+	}
+	OnTradeChanged.Broadcast();
+	return Result;
+}
+
+EMMOVendorResult AMMOCharacter::BuybackItem(int32 BuybackIndex)
+{
+	if (!CanTradeWith(ActiveVendor.Get()))
+	{
+		ShowPlayerMessage(MMOVendor::GetResultText(EMMOVendorResult::TooFar));
+		return EMMOVendorResult::TooFar;
+	}
+	if (!Buyback.IsValidIndex(BuybackIndex))
+	{
+		return EMMOVendorResult::InvalidItem;
+	}
+
+	const FMMOItemStack Stack = Buyback[BuybackIndex];
+	const int32 Cost = MMOVendor::GetSellPrice(Stack);
+	EMMOVendorResult Result = EMMOVendorResult::Success;
+	if (Inventory->GetCurrency() < Cost)
+	{
+		Result = EMMOVendorResult::NotEnoughMoney;
+	}
+	else if (Inventory->GetAddableQuantity(Stack.Item, Stack.Quantity) < Stack.Quantity)
+	{
+		Result = EMMOVendorResult::InventoryFull;
+	}
+
+	if (Result == EMMOVendorResult::Success)
+	{
+		Inventory->SpendCurrency(Cost);
+		Inventory->AddStack(Stack);
+		Buyback.RemoveAt(BuybackIndex);
+		PlayPresentationSound(MMOCharacterSounds::Coin);
+	}
+	else
+	{
+		ShowPlayerMessage(MMOVendor::GetResultText(Result));
+	}
+	OnTradeChanged.Broadcast();
+	return Result;
+}
+
 void AMMOCharacter::DoToggleQuestLog()
 {
 	if (AMMOHUD* HUD = Cast<AMMOHUD>(Cast<APlayerController>(GetController()) ? Cast<APlayerController>(GetController())->GetHUD() : nullptr))
@@ -1036,6 +1266,13 @@ void AMMOCharacter::HandleLevelUp(int32 NewLevel)
 void AMMOCharacter::HandleDamaged(float Amount, AActor* DamageInstigator)
 {
 	LastDamageTakenTime = GetWorld()->GetTimeSeconds();
+
+	// eating stops when you get hit
+	if (FoodEndTime > LastDamageTakenTime)
+	{
+		FoodEndTime = 0.0;
+		ShowPlayerMessage(NSLOCTEXT("MMOItems", "FoodInterrupted", "You stop eating."), false);
+	}
 
 	if (!IsDead())
 	{
@@ -1150,12 +1387,17 @@ void AMMOCharacter::PlayCameraShake(TSubclassOf<UCameraShakeBase> Shake, float S
 
 void AMMOCharacter::TickRegeneration()
 {
+	const double Now = GetWorld()->GetTimeSeconds();
 	if (IsDead() || Health->GetCurrentHealth() >= Health->GetMaxHealth())
 	{
 		return;
 	}
 
-	const double Now = GetWorld()->GetTimeSeconds();
+	if (FoodEndTime > Now)
+	{
+		Health->Heal(FoodHealPerSecond * 0.5f);
+	}
+
 	const double LastCombat = FMath::Max(LastDamageTakenTime, Combat->GetLastAttackTime());
 	if (Now - LastCombat >= OutOfCombatDelay)
 	{

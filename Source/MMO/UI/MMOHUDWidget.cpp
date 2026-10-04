@@ -6,6 +6,10 @@
 #include "UI/MMOInventoryWindowWidget.h"
 #include "UI/MMOLootWindowWidget.h"
 #include "UI/MMOQuestWidgets.h"
+#include "UI/MMOVendorWindowWidget.h"
+#include "UI/MMOActionSlotWidget.h"
+#include "Components/HorizontalBox.h"
+#include "Components/HorizontalBoxSlot.h"
 #include "Quests/MMOQuestDefinition.h"
 #include "Quests/MMOQuestLogComponent.h"
 #include "NPC/MMONPC.h"
@@ -104,7 +108,20 @@ void UMMOHUDWidget::BuildDefaultLayout()
 	// hotbar, bottom-center
 	const TSubclassOf<UMMOHotbarSlotWidget> SlotClass = HotbarSlotClass ? HotbarSlotClass : TSubclassOf<UMMOHotbarSlotWidget>(UMMOHotbarSlotWidget::StaticClass());
 	AttackSlot = WidgetTree->ConstructWidget<UMMOHotbarSlotWidget>(SlotClass, TEXT("AttackSlot"));
-	Place(Root, AttackSlot, FAnchors(0.5f, 1.0f), FVector2D(0.5f, 1.0f), FVector2D(0.0f, -28.0f));
+	ActionBarRow = WidgetTree->ConstructWidget<UHorizontalBox>(UHorizontalBox::StaticClass(), TEXT("ActionBarRow"));
+	ActionBarRow->AddChildToHorizontalBox(AttackSlot)->SetVerticalAlignment(VAlign_Bottom);
+	for (int32 Index = 0; Index < 8; ++Index)
+	{
+		UMMOActionSlotWidget* ActionSlot = WidgetTree->ConstructWidget<UMMOActionSlotWidget>(UMMOActionSlotWidget::StaticClass());
+		UHorizontalBoxSlot* RowSlot = ActionBarRow->AddChildToHorizontalBox(ActionSlot);
+		RowSlot->SetPadding(FMargin(6.0f, 0.0f, 0.0f, 0.0f));
+		RowSlot->SetVerticalAlignment(VAlign_Top);
+		ActionSlots.Add(ActionSlot);
+	}
+	Place(Root, ActionBarRow, FAnchors(0.5f, 1.0f), FVector2D(0.5f, 1.0f), FVector2D(0.0f, -28.0f));
+
+	StatusText = MakeText(WidgetTree, TEXT(""), 12, FLinearColor(0.55f, 0.9f, 0.45f), true);
+	Place(Root, StatusText, FAnchors(0.0f, 0.0f), FVector2D::ZeroVector, FVector2D(26.0f, 102.0f));
 
 
 	// error line, upper-center
@@ -169,6 +186,13 @@ void UMMOHUDWidget::BuildDefaultLayout()
 		Child->SetVisibility(Child->GetVisibility() == ESlateVisibility::Collapsed ? ESlateVisibility::Collapsed : ESlateVisibility::HitTestInvisible);
 	}
 
+	// the hotbar takes clicks and drops (only its buttons; the row itself lets clicks through)
+	ActionBarRow->SetVisibility(ESlateVisibility::SelfHitTestInvisible);
+	for (UMMOActionSlotWidget* ActionSlot : ActionSlots)
+	{
+		ActionSlot->SetVisibility(ESlateVisibility::Visible);
+	}
+
 	// windows (interactive)
 	CharacterWindow = WidgetTree->ConstructWidget<UMMOCharacterWindowWidget>(UMMOCharacterWindowWidget::StaticClass(), TEXT("CharacterWindow"));
 	Place(Root, CharacterWindow, FAnchors(0.0f, 0.5f), FVector2D(0.0f, 0.5f), FVector2D(24.0f, 40.0f));
@@ -182,10 +206,13 @@ void UMMOHUDWidget::BuildDefaultLayout()
 	DialogueWindow = WidgetTree->ConstructWidget<UMMODialogueWindowWidget>(UMMODialogueWindowWidget::StaticClass(), TEXT("DialogueWindow"));
 	Place(Root, DialogueWindow, FAnchors(0.0f, 0.5f), FVector2D(0.0f, 0.5f), FVector2D(24.0f, 20.0f));
 
+	VendorWindow = WidgetTree->ConstructWidget<UMMOVendorWindowWidget>(UMMOVendorWindowWidget::StaticClass(), TEXT("VendorWindow"));
+	Place(Root, VendorWindow, FAnchors(0.0f, 0.5f), FVector2D(0.0f, 0.5f), FVector2D(24.0f, 20.0f));
+
 	QuestLogWindow = WidgetTree->ConstructWidget<UMMOQuestLogWindowWidget>(UMMOQuestLogWindowWidget::StaticClass(), TEXT("QuestLogWindow"));
 	Place(Root, QuestLogWindow, FAnchors(0.5f, 0.5f), FVector2D(0.5f, 0.5f), FVector2D(0.0f, 0.0f));
 
-	for (UWidget* Window : { static_cast<UWidget*>(CharacterWindow), static_cast<UWidget*>(InventoryWindow), static_cast<UWidget*>(LootWindow), static_cast<UWidget*>(DialogueWindow), static_cast<UWidget*>(QuestLogWindow) })
+	for (UWidget* Window : { static_cast<UWidget*>(CharacterWindow), static_cast<UWidget*>(InventoryWindow), static_cast<UWidget*>(LootWindow), static_cast<UWidget*>(DialogueWindow), static_cast<UWidget*>(QuestLogWindow), static_cast<UWidget*>(VendorWindow) })
 	{
 		Window->SetVisibility(ESlateVisibility::Collapsed);
 	}
@@ -228,6 +255,10 @@ void UMMOHUDWidget::NativeConstruct()
 	if (QuestLogWindow)
 	{
 		QuestLogWindow->OnCloseRequested.BindLambda([this]() { CloseWindowFromWidget(QuestLogWindow); });
+	}
+	if (VendorWindow)
+	{
+		VendorWindow->OnCloseRequested.BindLambda([this]() { CloseWindowFromWidget(VendorWindow); });
 	}
 }
 
@@ -344,6 +375,41 @@ AMMONPC* UMMOHUDWidget::GetDialogueNPC() const
 	return IsDialogueOpen() ? DialogueWindow->GetNPC() : nullptr;
 }
 
+void UMMOHUDWidget::OpenVendor(AMMONPC* Vendor)
+{
+	AMMOCharacter* Character = BoundCharacter.Get();
+	if (VendorWindow && Vendor && Character)
+	{
+		Character->SetActiveVendor(Vendor);
+		VendorWindow->Open(Character, Vendor);
+		VendorWindow->SetVisibility(ESlateVisibility::Visible);
+		SetInventoryOpen(true);
+	}
+}
+
+void UMMOHUDWidget::CloseVendor()
+{
+	if (AMMOCharacter* Character = BoundCharacter.Get())
+	{
+		Character->SetActiveVendor(nullptr);
+	}
+	if (VendorWindow)
+	{
+		VendorWindow->Close();
+		VendorWindow->SetVisibility(ESlateVisibility::Collapsed);
+	}
+}
+
+bool UMMOHUDWidget::IsVendorOpen() const
+{
+	return VendorWindow && VendorWindow->GetVisibility() == ESlateVisibility::Visible;
+}
+
+AMMONPC* UMMOHUDWidget::GetOpenVendor() const
+{
+	return IsVendorOpen() ? VendorWindow->GetVendor() : nullptr;
+}
+
 void UMMOHUDWidget::SetQuestLogOpen(bool bOpen)
 {
 	if (QuestLogWindow)
@@ -455,6 +521,10 @@ void UMMOHUDWidget::CloseWindowFromWidget(UWidget* Window)
 	else if (Window == DialogueWindow)
 	{
 		CloseDialogue();
+	}
+	else if (Window == VendorWindow)
+	{
+		CloseVendor();
 	}
 	else if (Window)
 	{
@@ -626,6 +696,11 @@ void UMMOHUDWidget::BindToCharacter(AMMOCharacter* Character)
 	if (CharacterWindow)
 	{
 		CharacterWindow->Init(Character);
+	}
+	static const TCHAR* Keys[] = { TEXT("2"), TEXT("3"), TEXT("4"), TEXT("5"), TEXT("6"), TEXT("7"), TEXT("8"), TEXT("9") };
+	for (int32 Index = 0; Index < ActionSlots.Num(); ++Index)
+	{
+		ActionSlots[Index]->Setup(Character, Index, Keys[Index % UE_ARRAY_COUNT(Keys)]);
 	}
 }
 
@@ -804,6 +879,12 @@ void UMMOHUDWidget::UpdateBanners(AMMOCharacter* Character, float DeltaSeconds)
 		}
 	}
 
+	if (StatusText)
+	{
+		const float Food = Character ? Character->GetFoodRemaining() : 0.0f;
+		StatusText->SetText(Food > 0.0f ? FText::FromString(FString::Printf(TEXT("Eating... %ds"), FMath::CeilToInt(Food))) : FText::GetEmpty());
+	}
+
 	if (DeathOverlay)
 	{
 		const bool bDead = Character && Character->IsDead();
@@ -852,6 +933,11 @@ void UMMOHUDWidget::HandleAnyCombatEvent(const UMMOHealthComponent* Component, E
 		break;
 
 	case EMMOCombatEvent::Heal:
+		// big heals (potions) get a number; regeneration and food ticks stay quiet
+		if (bIsPlayer && Amount >= 10.0f)
+		{
+			AddFloatingText(Location, FString::Printf(TEXT("+%d"), FMath::RoundToInt(Amount)), FLinearColor(0.35f, 1.0f, 0.4f), 24, 1.4f);
+		}
 		break;
 	}
 }

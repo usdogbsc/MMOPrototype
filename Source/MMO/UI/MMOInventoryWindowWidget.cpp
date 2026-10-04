@@ -132,9 +132,9 @@ void UMMOInventoryWindowWidget::HandleClose()
 void UMMOInventoryWindowWidget::HandleSlotUse(UMMOItemSlotWidget* SlotWidget)
 {
 	AMMOCharacter* Owner = Character.Get();
-	if (Owner && SlotWidget && !SlotWidget->GetStack().IsEmpty() && SlotWidget->GetStack().Item->IsEquippable())
+	if (Owner && SlotWidget && !SlotWidget->GetStack().IsEmpty())
 	{
-		Owner->EquipInventorySlot(SlotWidget->GetSlotIndex());
+		Owner->UseOrEquipInventorySlot(SlotWidget->GetSlotIndex());
 	}
 }
 

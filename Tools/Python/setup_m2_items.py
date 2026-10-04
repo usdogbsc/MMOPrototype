@@ -287,6 +287,7 @@ LOOT = [
     ("WolfFang", 0.30, 1, 2),
     ("WornLeatherBoots", 0.06, 1, 1),
     ("Greyfang", 0.015, 1, 1),
+    ("MinorHealingPotion", 0.04, 1, 1),
 ]
 
 
@@ -295,7 +296,10 @@ def setup_loot_table(items):
     entries = []
     for item_id, chance, qmin, qmax in LOOT:
         entry = unreal.MMOLootEntry()
-        entry.set_editor_property("item", items[item_id])
+        item = items.get(item_id) or unreal.load_asset("/Game/MMO/Items/DA_Item_" + item_id)
+        if not item:
+            continue
+        entry.set_editor_property("item", item)
         entry.set_editor_property("drop_chance", chance)
         entry.set_editor_property("min_quantity", qmin)
         entry.set_editor_property("max_quantity", qmax)

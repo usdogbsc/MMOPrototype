@@ -6,6 +6,7 @@
 #include "Combat/MMOHealthComponent.h"
 #include "Combat/MMOProgressionComponent.h"
 #include "Items/MMOEquipmentComponent.h"
+#include "Items/MMOActionBarComponent.h"
 #include "Items/MMOInventoryComponent.h"
 #include "Items/MMOItemDefinition.h"
 #include "Quests/MMOQuestDefinition.h"
@@ -95,6 +96,7 @@ UMMOSaveGame* UMMOSaveSubsystem::Capture(const AMMOCharacter* Character, UObject
 	}
 	Save->CompletedQuests = QuestLog->GetCompletedQuestIds().Array();
 	Save->Discovered = Character->GetExploration()->GetDiscovered().Array();
+	Save->ActionBar = Character->GetActionBar()->GetSlots();
 	return Save;
 }
 
@@ -152,6 +154,12 @@ bool UMMOSaveSubsystem::Apply(const UMMOSaveGame* Save, AMMOCharacter* Character
 		}
 	}
 	Character->GetQuestLog()->RestoreState(Active, TSet<FName>(Save->CompletedQuests));
+
+	// version 1 saves had no hotbar: keep the current one
+	if (Save->Version >= 2)
+	{
+		Character->GetActionBar()->RestoreSlots(Save->ActionBar);
+	}
 
 	// position only applies to the map it was saved on
 	if (Save->bHasLocation && Save->MapName == MMOSave::GetMapName(Character->GetWorld()))

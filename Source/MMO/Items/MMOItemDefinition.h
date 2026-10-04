@@ -78,6 +78,32 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Equipment|Visual")
 	FTransform EquippedMeshTransform;
 
+	/** Consumables: health restored instantly */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Consumable", meta=(ClampMin=0))
+	float HealAmount = 0.0f;
+
+	/** Consumables: total health restored over EffectDuration (food). Interrupted by taking damage */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Consumable", meta=(ClampMin=0))
+	float HealOverTime = 0.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Consumable", meta=(ClampMin=0, Units="s"))
+	float EffectDuration = 0.0f;
+
+	/** Items in the same group share a cooldown (e.g. Potion, Food) */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Consumable")
+	FName CooldownGroup;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Consumable", meta=(ClampMin=0, Units="s"))
+	float Cooldown = 0.0f;
+
+	/** False for food and drink: only usable out of combat */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Consumable")
+	bool bUsableInCombat = true;
+
+	/** Vendor price in copper (0 = four times the sell value) */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Item", meta=(ClampMin=0))
+	int32 BuyPrice = 0;
+
 	/** Tint applied to EquippedMesh (if its material has a "Color" parameter) */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Equipment|Visual")
 	FLinearColor EquippedMeshColor = FLinearColor::White;
@@ -85,6 +111,9 @@ public:
 	bool IsStackable() const { return MaxStackSize > 1; }
 	bool IsEquippable() const { return EquipmentSlot != EMMOEquipmentSlot::None && EquipmentSlot != EMMOEquipmentSlot::Count; }
 	bool IsWeapon() const { return WeaponDamageMax > 0.0f; }
+	bool IsUsable() const { return HealAmount > 0.0f || HealOverTime > 0.0f; }
+	int32 GetBuyPrice() const { return BuyPrice > 0 ? BuyPrice : SellValue * 4; }
+	FName GetCooldownKey() const { return CooldownGroup.IsNone() ? ItemId : CooldownGroup; }
 
 	virtual FPrimaryAssetId GetPrimaryAssetId() const override { return FPrimaryAssetId(TEXT("MMOItem"), GetFName()); }
 

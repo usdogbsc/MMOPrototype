@@ -5,6 +5,7 @@
 #include "CoreMinimal.h"
 #include "GameFramework/Character.h"
 #include "World/MMOInteractable.h"
+#include "Items/MMOVendor.h"
 #include "MMONPC.generated.h"
 
 class UWidgetComponent;
@@ -66,6 +67,12 @@ public:
 	/** Quests this NPC gives or accepts */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="NPC")
 	TArray<TObjectPtr<UMMOQuestDefinition>> Quests;
+
+	/** Goods for sale. An NPC with stock offers "browse your goods" in conversation */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="NPC|Vendor")
+	TArray<FMMOVendorEntry> VendorStock;
+
+	bool IsVendor() const { return VendorStock.Num() > 0; }
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="NPC|Look")
 	TObjectPtr<USkeletalMesh> BodyMesh;

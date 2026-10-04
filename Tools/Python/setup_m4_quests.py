@@ -134,7 +134,7 @@ QUESTS = [
          summary="Warden Hollis wants you to slay 5 Grey Wolves in Whispering Meadow, east of the village gate.",
          progress="Still hearing howls from the meadow. Keep at it.",
          complete="That's the quietest the meadow's been all month. You've a steady hand, friend. Take this, the village can spare it.",
-         objectives=[(O.KILL, "GreyWolf", 5, "Grey Wolves slain")], xp=150, coin=30),
+         objectives=[(O.KILL, "GreyWolf", 5, "Grey Wolves slain")], xp=150, coin=30, items=[("MinorHealingPotion", 2)]),
     dict(id="PeltsForTheHearth", title="Pelts for the Hearth", level=1, giver="Brenna", turnin="Brenna",
          desc="Winter comes early to Thornwick, and half the beds upstairs still have summer blankets on them. "
               "If you're out among the wolves anyway, bring me back some good pelts. I'll stitch you something warm for your trouble.",
@@ -204,7 +204,12 @@ def setup_quests(items):
         rewards = []
         for item_id, quantity in spec.get("items", []):
             reward = unreal.MMOItemReward()
-            reward.set_editor_property("item", items[item_id])
+            # items from other setup scripts (e.g. potions from Milestone 6) are loaded by id
+            item = items.get(item_id) or unreal.load_asset("/Game/MMO/Items/DA_Item_" + item_id)
+            if not item:
+                log("WARNING: reward item %s does not exist yet (run setup_m6_economy.py)" % item_id)
+                continue
+            reward.set_editor_property("item", item)
             reward.set_editor_property("quantity", quantity)
             rewards.append(reward)
         quest.set_editor_property("reward_items", rewards)
@@ -226,10 +231,11 @@ def write_log():
             f.write("\n".join(LOG + m2.LOG))
 
 
-try:
-    main()
-    write_log()
-except Exception as error:
-    log("ERROR: %s" % error)
-    write_log()
-    raise
+if __name__ == "__main__":
+    try:
+        main()
+        write_log()
+    except Exception as error:
+        log("ERROR: %s" % error)
+        write_log()
+        raise

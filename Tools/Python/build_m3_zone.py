@@ -292,9 +292,12 @@ def build_dire_loot():
     table = load_or_create("DA_Loot_DireWolf", "/Game/MMO/Loot", unreal.MMOLootTable, unreal.DataAssetFactory())
     entries = []
     for item_id, chance, qmin, qmax in [("WolfPelt", 1.0, 1, 2), ("WolfFang", 0.75, 1, 3), ("RawWolfMeat", 0.6, 1, 2),
-                                         ("WornLeatherBoots", 0.15, 1, 1), ("Greyfang", 0.08, 1, 1)]:
+                                         ("WornLeatherBoots", 0.15, 1, 1), ("Greyfang", 0.08, 1, 1), ("MinorHealingPotion", 0.3, 1, 2)]:
+        item = unreal.load_asset("/Game/MMO/Items/DA_Item_" + item_id)
+        if not item:
+            continue
         entry = unreal.MMOLootEntry()
-        entry.set_editor_property("item", unreal.load_asset("/Game/MMO/Items/DA_Item_" + item_id))
+        entry.set_editor_property("item", item)
         entry.set_editor_property("drop_chance", chance)
         entry.set_editor_property("min_quantity", qmin)
         entry.set_editor_property("max_quantity", qmax)
@@ -1051,11 +1054,15 @@ NPCS = [
     dict(id="Brenna", name="Brenna Ashdown", title="Innkeeper", inn=(900, 120), body="Quinn",
          tints=[(0.35, 0.05, 0.04), (0.6, 0.52, 0.36)],
          greeting="Welcome to the Thornfire Inn! Warm hearth, cold cider, and a bed that won't bite. Wolves are another matter.",
-         quests=["PeltsForTheHearth"], hat=(SPHERE, "cloth_cream", (0, 0, 86), (0.27, 0.27, 0.16))),
+         quests=["PeltsForTheHearth"], stock=["HeartyBread", "ThornwickMeatPie"], hat=(SPHERE, "cloth_cream", (0, 0, 86), (0.27, 0.27, 0.16))),
     dict(id="Doran", name="Doran Ironmantle", title="Blacksmith", forge=(280, -20),
          tints=[(0.05, 0.05, 0.06), (0.2, 0.1, 0.04)],
          greeting="Mind the sparks. If it's steel you're after, I'm the only anvil between here and the mountains.",
-         quests=["FangsForTheForge", "TheBeastOfFanghollow"], hat=(CYL, "ash", (0, 0, 90), (0.29, 0.29, 0.1))),
+         quests=["FangsForTheForge", "TheBeastOfFanghollow"], stock=["IronShortsword", "PaddedLeatherVest", "SturdyLeatherLeggings"], hat=(CYL, "ash", (0, 0, 90), (0.29, 0.29, 0.1))),
+    dict(id="Mirelle", name="Mirelle Thistledown", title="Herbalist", stall=(-110, 0), body="Quinn",
+         tints=[(0.12, 0.2, 0.08), (0.28, 0.14, 0.3)],
+         greeting="Feverfew, thornleaf, a pinch of wolfsbane... not for drinking, that one. Looking for something to keep you on your feet out there?",
+         quests=[], stock=["MinorHealingPotion"], hat=(CONE, "cloth_green", (0, 0, 98), (0.3, 0.3, 0.3))),
     dict(id="Pell", name="Old Pell", title="Retired Miner", at=(700, -420), look=(300, 0),
          tints=[(0.12, 0.09, 0.06), (0.1, 0.13, 0.22)],
          greeting="Forty years I swung a pick in the Rustvein, east past the Greywood. They boarded it up after the deep tunnels went "
@@ -1068,6 +1075,7 @@ def build_npcs():
     plaza = (300, 0)
     inn = Frame(-1100, -900, facing_point(-1100, -900, *plaza))
     forge = Frame(1900, 300, facing_point(1900, 300, *plaza))
+    stall = Frame(900, -950, facing_point(900, -950, *plaza))
     for spec in NPCS:
         if "inn" in spec:
             x, y, _ = inn.at(spec["inn"][0], spec["inn"][1], 0)
@@ -1075,6 +1083,9 @@ def build_npcs():
         elif "forge" in spec:
             x, y, _ = forge.at(spec["forge"][0], spec["forge"][1], 0)
             yaw = forge.yaw
+        elif "stall" in spec:
+            x, y, _ = stall.at(spec["stall"][0], spec["stall"][1], 0)
+            yaw = stall.yaw
         else:
             x, y = spec["at"]
             yaw = facing_point(x, y, *spec["look"])
@@ -1086,6 +1097,16 @@ def build_npcs():
         actor.set_editor_property("title", spec["title"])
         actor.set_editor_property("greeting", spec["greeting"])
         actor.set_editor_property("quests", [q for q in (quest(qid) for qid in spec["quests"]) if q])
+        stock = []
+        for item_id in spec.get("stock", []):
+            item = unreal.load_asset("/Game/MMO/Items/DA_Item_" + item_id)
+            if not item:
+                log("WARNING: vendor item %s missing (run setup_m6_economy.py)" % item_id)
+                continue
+            entry = unreal.MMOVendorEntry()
+            entry.set_editor_property("item", item)
+            stock.append(entry)
+        actor.set_editor_property("vendor_stock", stock)
         if spec.get("body") == "Quinn":
             actor.set_editor_property("body_mesh", unreal.load_asset("/Game/Characters/Mannequins/Meshes/SKM_Quinn_Simple"))
         # slot 0 = head/legs, slot 1 = torso

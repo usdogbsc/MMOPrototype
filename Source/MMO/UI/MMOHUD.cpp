@@ -66,6 +66,16 @@ void AMMOHUD::Tick(float DeltaSeconds)
 		}
 	}
 
+	// so does trading
+	if (HUDWidget && HUDWidget->IsVendorOpen())
+	{
+		const AMMOCharacter* Character = Cast<AMMOCharacter>(GetOwningPawn());
+		if (!Character || !Character->CanTradeWith(HUDWidget->GetOpenVendor()))
+		{
+			CloseVendor();
+		}
+	}
+
 	// conversations end when the player walks away from the NPC
 	if (HUDWidget && HUDWidget->IsDialogueOpen())
 	{
@@ -100,6 +110,32 @@ void AMMOHUD::OpenDialogue(AMMONPC* NPC)
 		{
 			PlayUISound(LoadedWindowOpenSound);
 		}
+		UpdateInputMode();
+	}
+}
+
+void AMMOHUD::OpenVendor(AMMONPC* Vendor)
+{
+	if (HUDWidget && Vendor)
+	{
+		const bool bWasOpen = HUDWidget->IsVendorOpen();
+		HUDWidget->CloseDialogue();
+		HUDWidget->CloseLoot();
+		HUDWidget->OpenVendor(Vendor);
+		if (!bWasOpen)
+		{
+			PlayUISound(LoadedWindowOpenSound);
+		}
+		UpdateInputMode();
+	}
+}
+
+void AMMOHUD::CloseVendor()
+{
+	if (HUDWidget && HUDWidget->IsVendorOpen())
+	{
+		HUDWidget->CloseVendor();
+		PlayUISound(LoadedWindowCloseSound);
 		UpdateInputMode();
 	}
 }
@@ -170,6 +206,7 @@ bool AMMOHUD::CloseAllWindows()
 	HUDWidget->SetCharacterOpen(false);
 	HUDWidget->CloseLoot();
 	HUDWidget->CloseDialogue();
+	HUDWidget->CloseVendor();
 	HUDWidget->SetQuestLogOpen(false);
 	PlayUISound(LoadedWindowCloseSound);
 	UpdateInputMode();
@@ -178,7 +215,7 @@ bool AMMOHUD::CloseAllWindows()
 
 bool AMMOHUD::IsAnyWindowOpen() const
 {
-	return HUDWidget && (HUDWidget->IsInventoryOpen() || HUDWidget->IsCharacterOpen() || HUDWidget->IsLootOpen() || HUDWidget->IsDialogueOpen() || HUDWidget->IsQuestLogOpen());
+	return HUDWidget && (HUDWidget->IsInventoryOpen() || HUDWidget->IsCharacterOpen() || HUDWidget->IsLootOpen() || HUDWidget->IsDialogueOpen() || HUDWidget->IsQuestLogOpen() || HUDWidget->IsVendorOpen());
 }
 
 void AMMOHUD::HandleWindowClosed()

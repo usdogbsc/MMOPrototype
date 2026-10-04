@@ -10,6 +10,7 @@
 #include "Items/MMOItemTypes.h"
 #include "Items/MMOEquipmentComponent.h"
 #include "Items/MMOLootContainerComponent.h"
+#include "Items/MMOVendor.h"
 #include "MMOCharacter.generated.h"
 
 class USpringArmComponent;
@@ -26,11 +27,26 @@ class UMMOEquipmentComponent;
 class UMMOLootContainerComponent;
 class UMMOExplorationComponent;
 class UMMOQuestLogComponent;
+class UMMOCooldownComponent;
+class UMMOActionBarComponent;
+class AMMONPC;
 class UStaticMeshComponent;
 class AMMOCreature;
 struct FInputActionValue;
 
 DECLARE_LOG_CATEGORY_EXTERN(LogTemplateCharacter, Log, All);
+
+UENUM()
+enum class EMMOUseItemResult : uint8
+{
+	Success,
+	NotUsable,
+	NotInBackpack,
+	OnCooldown,
+	InCombat,
+	FullHealth,
+	Dead
+};
 
 /**
  *  A simple player-controllable third person character
@@ -76,6 +92,14 @@ class AMMOCharacter : public ACharacter, public IMMOMeleeAttacker
 	/** Accepted and completed quests */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Components", meta = (AllowPrivateAccess = "true"))
 	TObjectPtr<UMMOQuestLogComponent> QuestLog;
+
+	/** Item (and later ability) cooldowns */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Components", meta = (AllowPrivateAccess = "true"))
+	TObjectPtr<UMMOCooldownComponent> Cooldowns;
+
+	/** Hotbar keys 2-9 */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Components", meta = (AllowPrivateAccess = "true"))
+	TObjectPtr<UMMOActionBarComponent> ActionBar;
 
 	/** Visual for the main-hand item (uses the item's Equipped Mesh, if any) */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Components", meta = (AllowPrivateAccess = "true"))
@@ -143,6 +167,10 @@ protected:
 	UPROPERTY(EditAnywhere, Category="Input|Items")
 	TObjectPtr<UInputAction> QuestLogAction;
 
+	/** Hotbar slot keys 2-9. Created at runtime */
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<UInputAction>> ActionSlotActions;
+
 	/** How close the player must be to loot a corpse */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Items", meta=(ClampMin=0, Units="cm"))
 	float InteractRange = 350.0f;
@@ -165,6 +193,12 @@ protected:
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Items|Audio")
 	TSoftObjectPtr<USoundBase> ErrorSound;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Items|Audio")
+	TSoftObjectPtr<USoundBase> DrinkSound;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Items|Audio")
+	TSoftObjectPtr<USoundBase> EatSound;
 
 	/** Mapping context for the combat actions. If unset, one is created at runtime with the default keys */
 	UPROPERTY(EditAnywhere, Category="Input|Combat")
@@ -300,6 +334,14 @@ protected:
 	FTimerHandle RegenTimer;
 	FTimerHandle RespawnTimer;
 	FTimerHandle SaveTimer;
+
+	/** Food heal-over-time in progress */
+	float FoodHealPerSecond = 0.0f;
+	double FoodEndTime = 0.0;
+
+	/** The merchant whose window is open, and what was sold to them this session */
+	TWeakObjectPtr<AMMONPC> ActiveVendor;
+	TArray<FMMOItemStack> Buyback;
 
 	/** Saving starts once the saved game (if any) has been loaded, so a failed load never overwrites it */
 	bool bSaveReady = false;
@@ -489,6 +531,33 @@ public:
 	UFUNCTION(BlueprintCallable, Category="Input")
 	virtual void DoToggleQuestLog();
 
+	/** Uses hotbar slot 0-7 (keys 2-9). Returns true if something happened */
+	bool UseActionSlot(int32 Index);
+
+	/** Uses one of the item (potion, food...). Reports problems through OnPlayerMessage */
+	EMMOUseItemResult UseItem(UMMOItemDefinition* Item);
+
+	/** Right-click / double-click on a backpack item: sell it (merchant open), use it, or equip it */
+	void UseOrEquipInventorySlot(int32 SlotIndex);
+
+	/** True if the player hit or was hit within OutOfCombatDelay */
+	bool IsInCombat() const;
+
+	/** Seconds of eating left (0 if not eating) */
+	float GetFoodRemaining() const;
+
+	/** Merchant trading. The HUD sets the active vendor when the merchant window opens */
+	void SetActiveVendor(AMMONPC* Vendor);
+	AMMONPC* GetActiveVendor() const { return ActiveVendor.Get(); }
+	bool CanTradeWith(const AMMONPC* Vendor) const;
+	EMMOVendorResult BuyFromVendor(int32 EntryIndex, int32 Quantity = 1);
+	EMMOVendorResult SellInventorySlot(int32 SlotIndex);
+	EMMOVendorResult BuybackItem(int32 BuybackIndex);
+	const TArray<FMMOItemStack>& GetBuyback() const { return Buyback; }
+
+	/** Fired after any trade so the merchant window can refresh */
+	FSimpleMulticastDelegate OnTradeChanged;
+
 	/** Item actions used by the UI and debug tools. Each reports problems through OnPlayerMessage */
 	EMMOEquipResult EquipInventorySlot(int32 SlotIndex);
 	EMMOEquipResult UnequipSlot(EMMOEquipmentSlot Slot, int32 PreferredInventorySlot = INDEX_NONE);
@@ -545,5 +614,9 @@ public:
 	FORCEINLINE UMMOExplorationComponent* GetExploration() const { return Exploration; }
 
 	FORCEINLINE UMMOQuestLogComponent* GetQuestLog() const { return QuestLog; }
+
+	FORCEINLINE UMMOCooldownComponent* GetCooldowns() const { return Cooldowns; }
+
+	FORCEINLINE UMMOActionBarComponent* GetActionBar() const { return ActionBar; }
 };
 

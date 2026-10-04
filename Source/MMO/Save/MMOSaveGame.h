@@ -5,6 +5,7 @@
 #include "CoreMinimal.h"
 #include "GameFramework/SaveGame.h"
 #include "Items/MMOItemTypes.h"
+#include "Items/MMOActionBarComponent.h"
 #include "MMOSaveGame.generated.h"
 
 /** An item stored by id, so saves survive asset moves and don't hard-reference content */
@@ -48,7 +49,8 @@ class UMMOSaveGame : public USaveGame
 
 public:
 
-	static constexpr int32 CurrentVersion = 1;
+	/** 2: hotbar */
+	static constexpr int32 CurrentVersion = 2;
 
 	UPROPERTY()
 	int32 Version = CurrentVersion;
@@ -99,4 +101,7 @@ public:
 
 	UPROPERTY()
 	TArray<FName> Discovered;
+
+	UPROPERTY()
+	TArray<FMMOActionSlot> ActionBar;
 };

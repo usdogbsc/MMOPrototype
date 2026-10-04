@@ -77,6 +77,9 @@ public:
 
 	void ClearInventory();
 
+	/** Removes currency if there is enough. Returns false (and changes nothing) otherwise */
+	bool SpendCurrency(int32 Amount);
+
 	/** Sets the purse directly (save games) */
 	void SetCurrency(int32 Amount);
 

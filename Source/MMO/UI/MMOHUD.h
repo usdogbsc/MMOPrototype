@@ -30,6 +30,8 @@ public:
 	void CloseLoot();
 	void ToggleQuestLog();
 	void OpenDialogue(AMMONPC* NPC);
+	void OpenVendor(AMMONPC* Vendor);
+	void CloseVendor();
 	void CloseDialogue();
 
 	/** Closes every open window. Returns true if anything was open */

@@ -41,6 +41,9 @@
 #include "World/MMOExplorationComponent.h"
 #include "NPC/MMONPC.h"
 #include "Save/MMOSaveGame.h"
+#include "Combat/MMOCooldownComponent.h"
+#include "Items/MMOActionBarComponent.h"
+#include "UI/MMOVendorWindowWidget.h"
 #include "Save/MMOSaveSubsystem.h"
 #include "Engine/GameInstance.h"
 #include "Quests/MMOQuestDefinition.h"
@@ -69,6 +72,7 @@ namespace MMOSelfTest
 		float OriginalLeashRange = 0.0f;
 		double Mark = 0.0;
 		float HealthMark = 0.0f;
+		int32 ActionIndex = INDEX_NONE;
 		float OtherHealthMark = 0.0f;
 		int32 CounterMark = 0;
 		int32 HitCount = 0;
@@ -1143,7 +1147,144 @@ namespace MMOSelfTest
 			}
 			break;
 
-		case 35: // save, scramble everything, load: the character comes back exactly as it was (Milestone 5)
+		case 35: // consumables on the hotbar (Milestone 6)
+		{
+			UMMOItemDefinition* Potion = UMMOItemDefinition::FindById(TEXT("MinorHealingPotion"));
+			UMMOItemDefinition* Bread = UMMOItemDefinition::FindById(TEXT("HeartyBread"));
+			Check(Potion && Bread && Potion->IsUsable() && Bread->IsUsable(), TEXT("Potion and food items exist"));
+			if (!Potion || !Bread)
+			{
+				Finish();
+				return false;
+			}
+			UMMOActionBarComponent* Bar = Player->GetActionBar();
+			Inventory->RemoveItem(Potion, Inventory->CountItem(Potion));
+			Bar->ClearSlot(Bar->FindSlot(UMMOActionBarComponent::MakeItem(Potion->ItemId)));
+			Player->GetCooldowns()->ClearCooldown(Potion->GetCooldownKey());
+
+			Inventory->AddItem(Potion, 2, true);
+			State->ActionIndex = Bar->FindSlot(UMMOActionBarComponent::MakeItem(Potion->ItemId));
+			Check(State->ActionIndex != INDEX_NONE, FString::Printf(TEXT("New potions go onto the hotbar automatically (key %d)"), State->ActionIndex + 2));
+
+			PlayerHealth->RestoreHealth(PlayerHealth->GetMaxHealth());
+			Check(!Player->UseActionSlot(State->ActionIndex) && Inventory->CountItem(Potion) == 2, TEXT("Potions aren't wasted at full health"));
+
+			PlayerHealth->ApplyDamage(70.0f, nullptr);
+			State->HealthMark = PlayerHealth->GetCurrentHealth();
+			Check(Player->UseActionSlot(State->ActionIndex), TEXT("Hotbar key uses the potion"));
+			Check(FMath::IsNearlyEqual(PlayerHealth->GetCurrentHealth(), FMath::Min(PlayerHealth->GetMaxHealth(), State->HealthMark + Potion->HealAmount)) && Inventory->CountItem(Potion) == 1,
+				FString::Printf(TEXT("Potion heals %d instantly and is used up"), FMath::RoundToInt(Potion->HealAmount)));
+			Check(Player->GetCooldowns()->GetRemaining(Potion->GetCooldownKey()) > Potion->Cooldown - 2.0f, TEXT("Potion starts its cooldown"));
+			PlayerHealth->ApplyDamage(30.0f, nullptr);
+			Check(!Player->UseActionSlot(State->ActionIndex) && Inventory->CountItem(Potion) == 1, TEXT("A second potion is refused while on cooldown"));
+
+			Inventory->AddItem(Bread, 2, true);
+			Check(Player->UseItem(Bread) == EMMOUseItemResult::InCombat && Inventory->CountItem(Bread) == 2, TEXT("Food can't be eaten in combat"));
+			NextStep();
+			break;
+		}
+
+		case 36: // out of combat: eat
+			if (Elapsed() > 6.6f)
+			{
+				UMMOItemDefinition* Bread = UMMOItemDefinition::FindById(TEXT("HeartyBread"));
+				Check(!Player->IsInCombat(), TEXT("Player leaves combat after a few quiet seconds"));
+				PlayerHealth->RestoreHealth(PlayerHealth->GetMaxHealth() * 0.3f);
+				State->HealthMark = PlayerHealth->GetCurrentHealth();
+				Check(Player->UseItem(Bread) == EMMOUseItemResult::Success && Inventory->CountItem(Bread) == 1, TEXT("Eating out of combat works"));
+				Check(Player->GetFoodRemaining() > Bread->EffectDuration - 1.0f, TEXT("Food heals over time"));
+				NextStep();
+			}
+			break;
+
+		case 37:
+			if (Elapsed() > 2.1f)
+			{
+				const float Regen = 2.1f * 4.0f;
+				Check(PlayerHealth->GetCurrentHealth() > State->HealthMark + Regen + 4.0f, FString::Printf(TEXT("Food heals faster than resting alone (+%.0f in 2s)"), PlayerHealth->GetCurrentHealth() - State->HealthMark));
+				PlayerHealth->ApplyDamage(5.0f, nullptr);
+				Check(Player->GetFoodRemaining() <= 0.0f, TEXT("Taking damage stops eating"));
+				Check(!Player->GetCooldowns()->IsReady(TEXT("Potion")), TEXT("Potion cooldown keeps running"));
+				NextStep();
+			}
+			break;
+
+		case 38: // merchants
+		{
+			AMMONPC* Mirelle = FindNPC(World, TEXT("Mirelle"));
+			if (!Mirelle)
+			{
+				UE_LOG(LogMMO, Display, TEXT("MMO SELFTEST: no merchants in this map, skipping the vendor checks"));
+				State->Step = 41;
+				State->StepStart = Now();
+				break;
+			}
+			AMMONPC* Doran = FindNPC(World, TEXT("Doran"));
+			AMMONPC* Brenna = FindNPC(World, TEXT("Brenna"));
+			Check(Mirelle->IsVendor() && Doran && Doran->VendorStock.Num() >= 3 && Brenna && Brenna->IsVendor(), TEXT("Herbalist, blacksmith and innkeeper sell goods"));
+
+			UMMOItemDefinition* Potion = UMMOItemDefinition::FindById(TEXT("MinorHealingPotion"));
+			PlacePlayerNear(Mirelle->GetActorLocation(), 220.0f);
+			Check(Player->TryInteract(Mirelle), TEXT("Talk to Mirelle the herbalist"));
+			HUDOf(Player)->OpenVendor(Mirelle);
+			UMMOHUDWidget* Widget = HUDOf(Player)->GetHUDWidget();
+			Check(Widget->IsVendorOpen() && Widget->IsInventoryOpen() && !Widget->IsDialogueOpen() && Player->GetActiveVendor() == Mirelle,
+				TEXT("Browsing goods opens the merchant window next to the backpack"));
+
+			Inventory->SetCurrency(100);
+			const int32 Potions = Inventory->CountItem(Potion);
+			const int32 Price = Mirelle->VendorStock[0].GetPrice();
+			Check(Player->BuyFromVendor(0) == EMMOVendorResult::Success && Inventory->GetCurrency() == 100 - Price && Inventory->CountItem(Potion) == Potions + 1,
+				FString::Printf(TEXT("Buying a potion costs %s"), *MMOItems::FormatCurrency(Price)));
+			Inventory->SetCurrency(Price - 1);
+			Check(Player->BuyFromVendor(0) == EMMOVendorResult::NotEnoughMoney && Inventory->CountItem(Potion) == Potions + 1 && Inventory->GetCurrency() == Price - 1,
+				TEXT("Can't buy without enough money"));
+
+			UMMOItemDefinition* Pelt = UMMOItemDefinition::FindById(TEXT("WolfPelt"));
+			Inventory->RemoveItem(Pelt, Inventory->CountItem(Pelt));
+			Inventory->AddItem(Pelt, 4);
+			State->CurrencyMark = Inventory->GetCurrency();
+			Player->UseOrEquipInventorySlot(FindSlotOf(Inventory, Pelt));
+			Check(Inventory->CountItem(Pelt) == 0 && Inventory->GetCurrency() == State->CurrencyMark + 4 * Pelt->SellValue,
+				FString::Printf(TEXT("Right-clicking pelts sells them (+%s)"), *MMOItems::FormatCurrency(4 * Pelt->SellValue)));
+			Check(Player->GetBuyback().Num() == 1 && Player->GetBuyback()[0].Item == Pelt && Player->GetBuyback()[0].Quantity == 4, TEXT("Sold pelts appear under Buyback"));
+			Check(Player->BuybackItem(0) == EMMOVendorResult::Success && Inventory->CountItem(Pelt) == 4 && Inventory->GetCurrency() == State->CurrencyMark && Player->GetBuyback().Num() == 0,
+				TEXT("Buyback returns the pelts for the same price"));
+			Player->SellInventorySlot(FindSlotOf(Inventory, Pelt));
+			Inventory->SetCurrency(500);
+			State->bFlag = false;
+			NextStep();
+			break;
+		}
+
+		case 39: // screenshot the merchant, then walk away
+			if (!State->bFlag && Elapsed() > 0.6f)
+			{
+				Shot(TEXT("11_Vendor"));
+				State->bFlag = true;
+			}
+			else if (State->bFlag && Elapsed() > 1.0f)
+			{
+				State->bFlag = false;
+				PlacePlayerNear(FindNPC(World, TEXT("Mirelle"))->GetActorLocation(), 1500.0f);
+				NextStep();
+			}
+			break;
+
+		case 40:
+			if (Elapsed() > 0.5f)
+			{
+				UMMOItemDefinition* Bread = UMMOItemDefinition::FindById(TEXT("HeartyBread"));
+				Check(!HUDOf(Player)->GetHUDWidget()->IsVendorOpen() && Player->GetActiveVendor() == nullptr, TEXT("Walking away closes the merchant window"));
+				const int32 Money = Inventory->GetCurrency();
+				PlayerHealth->RestoreHealth(PlayerHealth->GetMaxHealth());
+				Player->UseOrEquipInventorySlot(FindSlotOf(Inventory, Bread));
+				Check(Inventory->GetCurrency() == Money && Inventory->CountItem(Bread) == 1, TEXT("Away from merchants, right-clicking an item never sells it"));
+				NextStep();
+			}
+			break;
+
+		case 41: // save, scramble everything, load: the character comes back exactly as it was (Milestone 5)
 		{
 			UMMOSaveSubsystem* Saves = World->GetGameInstance()->GetSubsystem<UMMOSaveSubsystem>();
 			Check(Saves && !Saves->IsPersistenceEnabled(), TEXT("Autosave is off during the self-test (real progress is never overwritten)"));
@@ -1182,6 +1323,7 @@ namespace MMOSelfTest
 			Inventory->ClearInventory();
 			Inventory->SetCurrency(0);
 			Equipment->ClearEquipment();
+			Player->GetActionBar()->RestoreSlots({});
 			Progression->ResetProgression();
 			QuestLog->RestoreState({}, {});
 			Player->GetExploration()->RestoreDiscovered({});
@@ -1213,6 +1355,7 @@ namespace MMOSelfTest
 			Check(bSameQuests, TEXT("Active quests (with progress) and completed quests restored"));
 			Check(TSet<FName>(After->Discovered).Num() == Before->Discovered.Num() && TSet<FName>(After->Discovered).Includes(TSet<FName>(Before->Discovered)), TEXT("Discovered places restored"));
 			Check(FVector::Dist(Player->GetActorLocation(), Location) < 60.0f, TEXT("Position restored"));
+			Check(After->ActionBar == Before->ActionBar && !Player->GetActionBar()->GetSlot(State->ActionIndex).IsEmpty(), TEXT("Hotbar restored"));
 
 			Check(Saves->DeleteSave(Slot) && !Saves->HasSave(Slot), TEXT("Save slot can be deleted"));
 			Finish();

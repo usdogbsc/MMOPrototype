@@ -24,6 +24,9 @@ class AMMODiscoveryZone;
 class AMMONPC;
 class UMMODialogueWindowWidget;
 class UMMOQuestLogWindowWidget;
+class UMMOVendorWindowWidget;
+class UMMOActionSlotWidget;
+class UHorizontalBox;
 
 /**
  *  Root MMO HUD: player frame, target frame, Basic Attack hotbar slot, floating combat text, banners and screen flashes.
@@ -59,6 +62,15 @@ public:
 	void CloseDialogue();
 	bool IsDialogueOpen() const;
 	AMMONPC* GetDialogueNPC() const;
+
+	void OpenVendor(AMMONPC* Vendor);
+	void CloseVendor();
+	bool IsVendorOpen() const;
+	AMMONPC* GetOpenVendor() const;
+	UMMOVendorWindowWidget* GetVendorWindow() const { return VendorWindow; }
+
+	/** Hotbar buttons for keys 2-9 */
+	const TArray<TObjectPtr<UMMOActionSlotWidget>>& GetActionSlots() const { return ActionSlots; }
 
 	void SetQuestLogOpen(bool bOpen);
 	bool IsQuestLogOpen() const;
@@ -144,6 +156,20 @@ protected:
 
 	UPROPERTY(BlueprintReadOnly, Category="HUD", meta=(BindWidgetOptional))
 	TObjectPtr<UMMOQuestLogWindowWidget> QuestLogWindow;
+
+	UPROPERTY(BlueprintReadOnly, Category="HUD", meta=(BindWidgetOptional))
+	TObjectPtr<UMMOVendorWindowWidget> VendorWindow;
+
+	/** Row holding Basic Attack and the item/ability buttons */
+	UPROPERTY(BlueprintReadOnly, Category="HUD", meta=(BindWidgetOptional))
+	TObjectPtr<UHorizontalBox> ActionBarRow;
+
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<UMMOActionSlotWidget>> ActionSlots;
+
+	/** "Eating..." under the player frame */
+	UPROPERTY(BlueprintReadOnly, Category="HUD", meta=(BindWidgetOptional))
+	TObjectPtr<UTextBlock> StatusText;
 
 	/** Accepted quests and their objectives, right side */
 	UPROPERTY(BlueprintReadOnly, Category="HUD", meta=(BindWidgetOptional))
