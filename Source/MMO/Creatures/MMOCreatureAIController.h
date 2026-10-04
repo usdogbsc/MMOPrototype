@@ -22,7 +22,8 @@ enum class EMMOCreatureAIState : uint8
 /**
  *  Simple state machine for hostile creatures:
  *  Idle -> (player in aggro range or attacked) -> Chasing <-> Attacking -> (leash exceeded / target dead) -> Returning -> Idle
- *  Moves by steering directly toward its goal, so it works without a NavMesh.
+ *  Moves with NavMesh pathfinding. If a path request fails (no NavMesh, off-mesh), it steers directly for a moment and retries.
+ *  Each creature picks its own hostile target (the player); a threat table can replace ChooseThreat later.
  */
 UCLASS()
 class AMMOCreatureAIController : public AAIController
@@ -48,6 +49,10 @@ public:
 	UFUNCTION(BlueprintPure, Category="AI")
 	AActor* GetThreatTarget() const { return ThreatTarget.Get(); }
 
+	/** True while following a NavMesh path (false while steering directly or standing still) */
+	UFUNCTION(BlueprintPure, Category="AI")
+	bool IsUsingNavigation() const;
+
 protected:
 
 	/** Extra distance beyond attack range before the creature resumes chasing, to prevent jitter */
@@ -58,10 +63,21 @@ protected:
 	UPROPERTY(EditAnywhere, Category="AI", meta=(Units="cm"))
 	float HomeAcceptanceRadius = 60.0f;
 
+	/** Seconds to steer directly after a failed path request before retrying navigation */
+	UPROPERTY(EditAnywhere, Category="AI", meta=(Units="s"))
+	float NavigationRetryDelay = 1.0f;
+
 	UPROPERTY(VisibleInstanceOnly, Category="AI")
 	EMMOCreatureAIState State = EMMOCreatureAIState::Idle;
 
 	TWeakObjectPtr<AActor> ThreatTarget;
+
+	/** What the current path request is heading for */
+	TWeakObjectPtr<AActor> MoveGoalActor;
+	bool bMovingHome = false;
+
+	/** World time until which we steer directly instead of pathing */
+	double DirectSteerUntil = 0.0;
 
 	void SetState(EMMOCreatureAIState NewState);
 
@@ -70,6 +86,9 @@ protected:
 	/** True if Target exists and is alive */
 	static bool IsValidThreat(const AActor* Target);
 
+	/** Picks a hostile target among nearby candidates (single player for now) */
+	AActor* ChooseThreat(const AMMOCreature* Creature) const;
+
 	void TickIdle(AMMOCreature* Creature);
 	void TickChasing(AMMOCreature* Creature);
 	void TickAttacking(AMMOCreature* Creature, float DeltaSeconds);
@@ -77,6 +96,11 @@ protected:
 
 	/** True if the creature has strayed too far from home or lost its target */
 	bool ShouldReturn(const AMMOCreature* Creature) const;
+
+	/** Path toward an actor, or toward home if Goal is null */
+	void MoveTowardGoal(AMMOCreature* Creature, AActor* Goal);
+
+	void StopMoving();
 
 	void SteerToward(AMMOCreature* Creature, const FVector& Destination);
 };

@@ -1,19 +1,32 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "Combat/MMOCombatComponent.h"
+#include "Animation/MMOAnimNotify_MeleeHit.h"
 #include "Combat/MMOHealthComponent.h"
 #include "Combat/MMOTargetable.h"
+#include "Animation/AnimInstance.h"
+#include "Animation/AnimSequenceBase.h"
 #include "Components/CapsuleComponent.h"
+#include "Components/SkeletalMeshComponent.h"
 #include "EngineUtils.h"
 #include "GameFramework/Character.h"
 #include "GameFramework/Controller.h"
+#include "TimerManager.h"
 
 #define LOCTEXT_NAMESPACE "MMOCombat"
 
 UMMOCombatComponent::UMMOCombatComponent()
 {
 	PrimaryComponentTick.bCanEverTick = true;
-	PrimaryComponentTick.TickInterval = 0.1f;
+
+	SwingAnimation = TSoftObjectPtr<UAnimSequenceBase>(FSoftObjectPath(TEXT("/Game/MMO/Animations/A_MMO_PlayerBasicAttack.A_MMO_PlayerBasicAttack")));
+}
+
+void UMMOCombatComponent::BeginPlay()
+{
+	Super::BeginPlay();
+
+	LoadedSwingAnimation = SwingAnimation.LoadSynchronous();
 }
 
 void UMMOCombatComponent::TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction)
@@ -29,6 +42,35 @@ void UMMOCombatComponent::TickComponent(float DeltaTime, ELevelTick TickType, FA
 		{
 			ClearTarget();
 		}
+	}
+
+	if (!bAutoAttackActive)
+	{
+		return;
+	}
+
+	const UMMOHealthComponent* OwnerHealth = GetOwner()->FindComponentByClass<UMMOHealthComponent>();
+	const UMMOHealthComponent* TargetHealth = GetTargetHealth(CurrentTarget);
+	if ((OwnerHealth && OwnerHealth->IsDead()) || !TargetHealth || TargetHealth->IsDead())
+	{
+		// target died (or we did): auto-attack ends, target stays selected per the targeting rules above
+		StopAutoAttack();
+		return;
+	}
+
+	if (bSwingPending || GetBasicAttackCooldownRemaining() > 0.0f)
+	{
+		return;
+	}
+
+	if (IsTargetInRange())
+	{
+		BeginSwing();
+	}
+	else
+	{
+		// stay active and resume automatically once back in range
+		WarnOutOfRange();
 	}
 }
 
@@ -56,12 +98,37 @@ void UMMOCombatComponent::SetTarget(AActor* NewTarget)
 	{
 		NewTargetable->SetTargeted(true);
 	}
+	else
+	{
+		StopAutoAttack();
+	}
 
 	OnTargetChanged.Broadcast(CurrentTarget);
 }
 
 void UMMOCombatComponent::TargetFromView()
 {
+	FVector ViewLocation;
+	FRotator ViewRotation;
+	GetViewPoint(ViewLocation, ViewRotation);
+
+	// first: whatever creature capsule is directly under the crosshair
+	FCollisionQueryParams Params(SCENE_QUERY_STAT(MMOTargetTrace), false, GetOwner());
+	TArray<FHitResult> Hits;
+	GetWorld()->SweepMultiByChannel(Hits, ViewLocation, ViewLocation + ViewRotation.Vector() * (TargetingRange + 500.0f),
+		FQuat::Identity, ECC_Pawn, FCollisionShape::MakeSphere(30.0f), Params);
+
+	for (const FHitResult& Hit : Hits)
+	{
+		const IMMOTargetable* Targetable = Cast<IMMOTargetable>(Hit.GetActor());
+		if (Targetable && Targetable->IsTargetable())
+		{
+			SetTarget(Hit.GetActor());
+			return;
+		}
+	}
+
+	// otherwise: the living target closest to the crosshair within a small cone
 	TArray<TPair<AActor*, float>> Candidates;
 	GatherCandidates(CrosshairTargetAngle, Candidates);
 
@@ -108,58 +175,166 @@ bool UMMOCombatComponent::CycleTarget()
 	return true;
 }
 
-EMMOAttackResult UMMOCombatComponent::TryBasicAttack()
+EMMOAttackResult UMMOCombatComponent::ToggleAutoAttack()
 {
-	AActor* Owner = GetOwner();
-	const UMMOHealthComponent* OwnerHealth = Owner ? Owner->FindComponentByClass<UMMOHealthComponent>() : nullptr;
-	if (!Owner || (OwnerHealth && OwnerHealth->IsDead()))
+	if (bAutoAttackActive)
+	{
+		StopAutoAttack();
+		return EMMOAttackResult::Success;
+	}
+
+	return StartAutoAttack();
+}
+
+EMMOAttackResult UMMOCombatComponent::StartAutoAttack()
+{
+	const UMMOHealthComponent* OwnerHealth = GetOwner()->FindComponentByClass<UMMOHealthComponent>();
+	if (OwnerHealth && OwnerHealth->IsDead())
 	{
 		return EMMOAttackResult::AttackerDead;
 	}
 
-	// convenience: pressing attack with no target picks the nearest enemy in front of us
+	// convenience: with no target, pick the nearest enemy in front of us
 	if (!CurrentTarget)
 	{
 		CycleTarget();
 	}
 
-	UMMOHealthComponent* TargetHealth = GetTargetHealth(CurrentTarget);
+	const UMMOHealthComponent* TargetHealth = GetTargetHealth(CurrentTarget);
 	if (!CurrentTarget || !TargetHealth)
 	{
-		return FailAttack(EMMOAttackResult::NoTarget, LOCTEXT("NoTarget", "You have no target."));
+		return Fail(EMMOAttackResult::NoTarget, LOCTEXT("NoTarget", "You have no target."));
 	}
 
 	if (TargetHealth->IsDead())
 	{
-		return FailAttack(EMMOAttackResult::TargetDead, LOCTEXT("TargetDead", "Your target is dead."));
+		return Fail(EMMOAttackResult::TargetDead, LOCTEXT("TargetDead", "Your target is dead."));
 	}
 
-	if (GetBasicAttackCooldownRemaining() > 0.0f)
+	if (!bAutoAttackActive)
 	{
-		return FailAttack(EMMOAttackResult::OnCooldown, LOCTEXT("OnCooldown", "Basic Attack is not ready yet."));
+		bAutoAttackActive = true;
+		OnAutoAttackChanged.Broadcast(true);
 	}
 
-	if (GetEdgeDistance(Owner, CurrentTarget) > BasicAttackRange)
+	if (!IsTargetInRange())
 	{
-		return FailAttack(EMMOAttackResult::OutOfRange, LOCTEXT("OutOfRange", "Target is out of range."));
+		LastOutOfRangeMessageTime = -1000.0;
+		WarnOutOfRange();
+		return EMMOAttackResult::OutOfRange;
 	}
-
-	// face the target so the swing reads correctly
-	FVector ToTarget = CurrentTarget->GetActorLocation() - Owner->GetActorLocation();
-	ToTarget.Z = 0.0f;
-	if (!ToTarget.IsNearlyZero())
-	{
-		Owner->SetActorRotation(ToTarget.Rotation());
-	}
-
-	LastAttackTime = GetWorld()->GetTimeSeconds();
-
-	// keep a reference: the damage below may kill the target and trigger callbacks
-	AActor* Target = CurrentTarget;
-	const float Applied = TargetHealth->ApplyDamage(BasicAttackDamage, Owner);
-	OnBasicAttack.Broadcast(Target, Applied);
 
 	return EMMOAttackResult::Success;
+}
+
+void UMMOCombatComponent::StopAutoAttack()
+{
+	if (bAutoAttackActive)
+	{
+		bAutoAttackActive = false;
+		OnAutoAttackChanged.Broadcast(false);
+	}
+}
+
+void UMMOCombatComponent::BeginSwing()
+{
+	AActor* Owner = GetOwner();
+	LastSwingTime = GetWorld()->GetTimeSeconds();
+	bSwingPending = true;
+	PendingSwingTarget = CurrentTarget;
+
+	// face the target when standing still. While moving, the player keeps full control of facing
+	if (Owner->GetVelocity().Size2D() < 10.0f)
+	{
+		FVector ToTarget = CurrentTarget->GetActorLocation() - Owner->GetActorLocation();
+		ToTarget.Z = 0.0f;
+		if (!ToTarget.IsNearlyZero())
+		{
+			Owner->SetActorRotation(ToTarget.Rotation());
+		}
+	}
+
+	// play the swing; its MMO Melee Hit notify will call NotifyMeleeHitFrame
+	float HitTime = -1.0f;
+	const ACharacter* Character = Cast<ACharacter>(Owner);
+	UAnimInstance* AnimInstance = Character && Character->GetMesh() ? Character->GetMesh()->GetAnimInstance() : nullptr;
+	if (AnimInstance && LoadedSwingAnimation)
+	{
+		if (AnimInstance->PlaySlotAnimationAsDynamicMontage(LoadedSwingAnimation, SwingSlotName, 0.05f, 0.2f, SwingPlayRate))
+		{
+			HitTime = UMMOAnimNotify_MeleeHit::FindHitTime(LoadedSwingAnimation);
+		}
+	}
+
+	// safety net: if the notify never fires (missing notify, interrupted montage), resolve anyway
+	const float ResolveDelay = HitTime >= 0.0f ? HitTime / SwingPlayRate + 0.25f : FallbackHitDelay;
+	bLastHitFromNotify = false;
+	GetWorld()->GetTimerManager().SetTimer(SwingResolveTimer, this, &UMMOCombatComponent::ResolveSwing, FMath::Max(0.01f, ResolveDelay), false);
+
+	OnSwingStarted.Broadcast(CurrentTarget);
+}
+
+void UMMOCombatComponent::NotifyMeleeHitFrame()
+{
+	if (bSwingPending)
+	{
+		bLastHitFromNotify = true;
+		ResolveSwing();
+	}
+}
+
+void UMMOCombatComponent::ResolveSwing()
+{
+	if (!bSwingPending)
+	{
+		return;
+	}
+
+	GetWorld()->GetTimerManager().ClearTimer(SwingResolveTimer);
+	bSwingPending = false;
+
+	AActor* Target = PendingSwingTarget.Get();
+	PendingSwingTarget.Reset();
+
+	UMMOHealthComponent* TargetHealth = GetTargetHealth(Target);
+	if (!TargetHealth || TargetHealth->IsDead())
+	{
+		return;
+	}
+
+	// re-validate reach at the moment of impact
+	if (GetEdgeDistance(GetOwner(), Target) > BasicAttackRange + HitRangeTolerance)
+	{
+		WarnOutOfRange();
+		return;
+	}
+
+	const float Applied = TargetHealth->ApplyDamage(BasicAttackDamage, GetOwner());
+	OnBasicAttack.Broadcast(Target, Applied);
+
+	// killing blow: auto-attack ends right away
+	if (TargetHealth->IsDead() && Target == CurrentTarget)
+	{
+		StopAutoAttack();
+	}
+}
+
+void UMMOCombatComponent::WarnOutOfRange()
+{
+	const double Now = GetWorld()->GetTimeSeconds();
+	if (Now - LastOutOfRangeMessageTime < OutOfRangeMessageInterval)
+	{
+		return;
+	}
+
+	LastOutOfRangeMessageTime = Now;
+	++OutOfRangeWarningCount;
+	OnCombatError.Broadcast(LOCTEXT("OutOfRange", "Out of Range"));
+}
+
+bool UMMOCombatComponent::IsTargetInRange() const
+{
+	return CurrentTarget && GetEdgeDistance(GetOwner(), CurrentTarget) <= BasicAttackRange;
 }
 
 float UMMOCombatComponent::GetBasicAttackCooldownRemaining() const
@@ -170,7 +345,7 @@ float UMMOCombatComponent::GetBasicAttackCooldownRemaining() const
 		return 0.0f;
 	}
 
-	return FMath::Max(0.0f, static_cast<float>(LastAttackTime + BasicAttackCooldown - World->GetTimeSeconds()));
+	return FMath::Max(0.0f, static_cast<float>(LastSwingTime + BasicAttackCooldown - World->GetTimeSeconds()));
 }
 
 float UMMOCombatComponent::GetEdgeDistance(const AActor* A, const AActor* B)
@@ -262,7 +437,7 @@ void UMMOCombatComponent::GetViewPoint(FVector& OutLocation, FRotator& OutRotati
 	GetOwner()->GetActorEyesViewPoint(OutLocation, OutRotation);
 }
 
-EMMOAttackResult UMMOCombatComponent::FailAttack(EMMOAttackResult Result, const FText& Message)
+EMMOAttackResult UMMOCombatComponent::Fail(EMMOAttackResult Result, const FText& Message)
 {
 	OnCombatError.Broadcast(Message);
 	return Result;

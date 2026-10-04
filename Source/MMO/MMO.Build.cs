@@ -18,7 +18,10 @@ public class MMO : ModuleRules
 			"StateTreeModule",
 			"GameplayStateTreeModule",
 			"UMG",
-			"Slate"
+			"Slate",
+			"SlateCore",
+			"NavigationSystem",
+			"Niagara"
 		});
 
 		PrivateDependencyModuleNames.AddRange(new string[] { });

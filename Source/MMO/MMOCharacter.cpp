@@ -12,14 +12,33 @@
 #include "InputActionValue.h"
 #include "InputAction.h"
 #include "InputMappingContext.h"
-#include "Animation/AnimInstance.h"
-#include "Animation/AnimSequenceBase.h"
+#include "Camera/CameraShakeBase.h"
+#include "Camera/PlayerCameraManager.h"
 #include "Combat/MMOHealthComponent.h"
 #include "Combat/MMOProgressionComponent.h"
 #include "Combat/MMOCombatComponent.h"
+#include "Kismet/GameplayStatics.h"
+#include "NiagaraFunctionLibrary.h"
+#include "NiagaraSystem.h"
+#include "Sound/SoundBase.h"
 #include "TimerManager.h"
-#include "UObject/ConstructorHelpers.h"
 #include "MMO.h"
+
+namespace MMOCharacterSounds
+{
+	static const FName Swing(TEXT("Swing"));
+	static const FName MeleeImpact(TEXT("MeleeImpact"));
+	static const FName Hurt(TEXT("Hurt"));
+	static const FName LevelUp(TEXT("LevelUp"));
+	static const FName AutoAttackOn(TEXT("AutoAttackOn"));
+	static const FName AutoAttackOff(TEXT("AutoAttackOff"));
+	static const FName Death(TEXT("Death"));
+
+	static TSoftObjectPtr<USoundBase> Default(const TCHAR* AssetName)
+	{
+		return TSoftObjectPtr<USoundBase>(FSoftObjectPath(FString::Printf(TEXT("/Game/MMO/Audio/%s.%s"), AssetName, AssetName)));
+	}
+}
 
 AMMOCharacter::AMMOCharacter()
 {
@@ -63,12 +82,17 @@ AMMOCharacter::AMMOCharacter()
 
 	Combat = CreateDefaultSubobject<UMMOCombatComponent>(TEXT("Combat"));
 
-	// default attack swing from the shared mannequin animations. Can be overridden in the Blueprint
-	static ConstructorHelpers::FObjectFinder<UAnimSequenceBase> AttackAnim(TEXT("/Game/Characters/Mannequins/Anims/Unarmed/Attack/MM_Attack_01.MM_Attack_01"));
-	if (AttackAnim.Succeeded())
-	{
-		BasicAttackAnimation = AttackAnim.Object;
-	}
+	// presentation defaults (soft references: missing assets just mean no sound/effect)
+	SwingSound = MMOCharacterSounds::Default(TEXT("S_MMO_Swing"));
+	MeleeImpactSound = MMOCharacterSounds::Default(TEXT("S_MMO_MeleeImpact"));
+	HurtSound = MMOCharacterSounds::Default(TEXT("S_MMO_PlayerHurt"));
+	LevelUpSound = MMOCharacterSounds::Default(TEXT("S_MMO_LevelUp"));
+	AutoAttackOnSound = MMOCharacterSounds::Default(TEXT("S_MMO_AutoAttackOn"));
+	AutoAttackOffSound = MMOCharacterSounds::Default(TEXT("S_MMO_AutoAttackOff"));
+	DeathSound = MMOCharacterSounds::Default(TEXT("S_MMO_PlayerDeath"));
+	MeleeImpactEffect = TSoftObjectPtr<UNiagaraSystem>(FSoftObjectPath(TEXT("/Game/Variant_Combat/VFX/NS_Damage.NS_Damage")));
+	MeleeImpactCameraShake = TSoftClassPtr<UCameraShakeBase>(FSoftObjectPath(TEXT("/Game/Variant_Combat/Blueprints/BP_CameraShake_Hit_Enemy.BP_CameraShake_Hit_Enemy_C")));
+	HurtCameraShake = TSoftClassPtr<UCameraShakeBase>(FSoftObjectPath(TEXT("/Game/Variant_Combat/Blueprints/BP_CameraShake_Hit_Player.BP_CameraShake_Hit_Player_C")));
 
 	// Note: The skeletal mesh and anim blueprint references on the Mesh component (inherited from Character) 
 	// are set in the derived blueprint asset named ThirdPersonCharacter (to avoid direct content references in C++)
@@ -90,8 +114,53 @@ void AMMOCharacter::BeginPlay()
 	Health->OnDeath.AddDynamic(this, &AMMOCharacter::HandleDeath);
 	Progression->OnLevelUp.AddDynamic(this, &AMMOCharacter::HandleLevelUp);
 	Combat->OnBasicAttack.AddDynamic(this, &AMMOCharacter::HandleBasicAttack);
+	Combat->OnSwingStarted.AddDynamic(this, &AMMOCharacter::HandleSwingStarted);
+	Combat->OnAutoAttackChanged.AddDynamic(this, &AMMOCharacter::HandleAutoAttackChanged);
 
 	GetWorldTimerManager().SetTimer(RegenTimer, this, &AMMOCharacter::TickRegeneration, 0.5f, true);
+
+	// MMO camera: a little higher and further back than the template, with smooth follow and wheel zoom
+	CameraMaxDistance = FMath::Max(CameraMaxDistance, CameraMinDistance);
+	DesiredCameraDistance = FMath::Clamp(CameraDefaultDistance, CameraMinDistance, CameraMaxDistance);
+	GetCameraBoom()->TargetArmLength = DesiredCameraDistance;
+	GetCameraBoom()->SocketOffset = CameraSocketOffset;
+	GetCameraBoom()->bEnableCameraLag = CameraLagSpeed > 0.0f;
+	GetCameraBoom()->CameraLagSpeed = CameraLagSpeed;
+	GetCameraBoom()->bDoCollisionTest = true;
+	if (AController* PlayerController = GetController())
+	{
+		FRotator ControlRotation = PlayerController->GetControlRotation();
+		ControlRotation.Pitch = CameraInitialPitch;
+		PlayerController->SetControlRotation(ControlRotation);
+	}
+
+	LoadedSounds.Add(MMOCharacterSounds::Swing, SwingSound.LoadSynchronous());
+	LoadedSounds.Add(MMOCharacterSounds::MeleeImpact, MeleeImpactSound.LoadSynchronous());
+	LoadedSounds.Add(MMOCharacterSounds::Hurt, HurtSound.LoadSynchronous());
+	LoadedSounds.Add(MMOCharacterSounds::LevelUp, LevelUpSound.LoadSynchronous());
+	LoadedSounds.Add(MMOCharacterSounds::AutoAttackOn, AutoAttackOnSound.LoadSynchronous());
+	LoadedSounds.Add(MMOCharacterSounds::AutoAttackOff, AutoAttackOffSound.LoadSynchronous());
+	LoadedSounds.Add(MMOCharacterSounds::Death, DeathSound.LoadSynchronous());
+	LoadedMeleeImpactEffect = MeleeImpactEffect.LoadSynchronous();
+	LoadedMeleeImpactCameraShake = MeleeImpactCameraShake.LoadSynchronous();
+	LoadedHurtCameraShake = HurtCameraShake.LoadSynchronous();
+}
+
+void AMMOCharacter::Tick(float DeltaSeconds)
+{
+	Super::Tick(DeltaSeconds);
+
+	// ease toward the requested zoom distance
+	USpringArmComponent* Boom = GetCameraBoom();
+	if (!FMath::IsNearlyEqual(Boom->TargetArmLength, DesiredCameraDistance, 0.5f))
+	{
+		Boom->TargetArmLength = FMath::FInterpTo(Boom->TargetArmLength, DesiredCameraDistance, DeltaSeconds, CameraZoomSpeed);
+	}
+}
+
+void AMMOCharacter::NotifyMeleeHitFrame()
+{
+	Combat->NotifyMeleeHitFrame();
 }
 
 void AMMOCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputComponent)
@@ -104,6 +173,10 @@ void AMMOCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputCompon
 		EnhancedInputComponent->BindAction(TargetAction, ETriggerEvent::Started, this, &AMMOCharacter::DoTarget);
 		EnhancedInputComponent->BindAction(CycleTargetAction, ETriggerEvent::Started, this, &AMMOCharacter::DoCycleTarget);
 		EnhancedInputComponent->BindAction(BasicAttackAction, ETriggerEvent::Started, this, &AMMOCharacter::DoBasicAttack);
+		EnhancedInputComponent->BindAction(ClearTargetAction, ETriggerEvent::Started, this, &AMMOCharacter::DoClearTarget);
+
+		// Camera zoom
+		EnhancedInputComponent->BindAction(ZoomAction, ETriggerEvent::Triggered, this, &AMMOCharacter::Zoom);
 		
 		// Jumping
 		EnhancedInputComponent->BindAction(JumpAction, ETriggerEvent::Started, this, &ACharacter::Jump);
@@ -192,12 +265,12 @@ void AMMOCharacter::CreateDefaultCombatInput()
 		CombatMappingContext = NewObject<UInputMappingContext>(this, TEXT("IMC_MMOCombat_Runtime"));
 	}
 
-	auto EnsureAction = [this, bCreateContext](TObjectPtr<UInputAction>& Action, const TCHAR* Name, const FKey& Key)
+	auto EnsureAction = [this, bCreateContext](TObjectPtr<UInputAction>& Action, const TCHAR* Name, const FKey& Key, EInputActionValueType ValueType = EInputActionValueType::Boolean)
 	{
 		if (!Action)
 		{
 			Action = NewObject<UInputAction>(this, Name);
-			Action->ValueType = EInputActionValueType::Boolean;
+			Action->ValueType = ValueType;
 		}
 		if (bCreateContext)
 		{
@@ -208,6 +281,8 @@ void AMMOCharacter::CreateDefaultCombatInput()
 	EnsureAction(TargetAction, TEXT("IA_MMOTarget_Runtime"), EKeys::LeftMouseButton);
 	EnsureAction(CycleTargetAction, TEXT("IA_MMOCycleTarget_Runtime"), EKeys::Tab);
 	EnsureAction(BasicAttackAction, TEXT("IA_MMOBasicAttack_Runtime"), EKeys::One);
+	EnsureAction(ClearTargetAction, TEXT("IA_MMOClearTarget_Runtime"), EKeys::Escape);
+	EnsureAction(ZoomAction, TEXT("IA_MMOZoom_Runtime"), EKeys::MouseWheelAxis, EInputActionValueType::Axis1D);
 
 	if (const APlayerController* PC = Cast<APlayerController>(GetController()))
 	{
@@ -241,8 +316,23 @@ void AMMOCharacter::DoBasicAttack()
 {
 	if (!IsDead())
 	{
-		Combat->TryBasicAttack();
+		Combat->ToggleAutoAttack();
 	}
+}
+
+void AMMOCharacter::DoClearTarget()
+{
+	Combat->ClearTarget();
+}
+
+void AMMOCharacter::DoZoom(float Amount)
+{
+	DesiredCameraDistance = FMath::Clamp(DesiredCameraDistance - Amount * CameraZoomStep, CameraMinDistance, CameraMaxDistance);
+}
+
+void AMMOCharacter::Zoom(const FInputActionValue& Value)
+{
+	DoZoom(Value.Get<float>());
 }
 
 bool AMMOCharacter::IsDead() const
@@ -270,6 +360,7 @@ void AMMOCharacter::HandleLevelUp(int32 NewLevel)
 {
 	// levelling up fully heals: a classic, satisfying reward that also keeps the test loop moving
 	ApplyLevelStats(NewLevel, true);
+	PlayPresentationSound(MMOCharacterSounds::LevelUp);
 
 	UE_LOG(LogMMO, Log, TEXT("Player reached level %d (Max Health %.0f, Basic Attack %.0f)"), NewLevel, Health->GetMaxHealth(), Combat->BasicAttackDamage);
 }
@@ -277,6 +368,12 @@ void AMMOCharacter::HandleLevelUp(int32 NewLevel)
 void AMMOCharacter::HandleDamaged(float Amount, AActor* DamageInstigator)
 {
 	LastDamageTakenTime = GetWorld()->GetTimeSeconds();
+
+	if (!IsDead())
+	{
+		PlayPresentationSound(MMOCharacterSounds::Hurt);
+		PlayCameraShake(LoadedHurtCameraShake, 1.0f);
+	}
 }
 
 void AMMOCharacter::HandleDeath(AActor* Killer)
@@ -284,6 +381,7 @@ void AMMOCharacter::HandleDeath(AActor* Killer)
 	UE_LOG(LogMMO, Log, TEXT("Player was killed by %s"), *GetNameSafe(Killer));
 
 	Combat->ClearTarget();
+	PlayPresentationSound(MMOCharacterSounds::Death);
 
 	if (APlayerController* PC = Cast<APlayerController>(GetController()))
 	{
@@ -328,14 +426,57 @@ void AMMOCharacter::RespawnPlayer()
 
 void AMMOCharacter::HandleBasicAttack(AActor* Target, float Damage)
 {
-	if (!BasicAttackAnimation)
+	// the swing connected: impact sound, effect on the target, and a light camera kick
+	if (!Target || Damage <= 0.0f)
 	{
 		return;
 	}
 
-	if (UAnimInstance* AnimInstance = GetMesh()->GetAnimInstance())
+	const FVector ImpactLocation = Target->GetActorLocation() + (GetActorLocation() - Target->GetActorLocation()).GetSafeNormal2D() * 35.0f;
+	PlayPresentationSound(MMOCharacterSounds::MeleeImpact, &ImpactLocation);
+
+	if (LoadedMeleeImpactEffect)
 	{
-		AnimInstance->PlaySlotAnimationAsDynamicMontage(BasicAttackAnimation, TEXT("DefaultSlot"), 0.1f, 0.2f, BasicAttackAnimationPlayRate);
+		UNiagaraFunctionLibrary::SpawnSystemAtLocation(this, LoadedMeleeImpactEffect, ImpactLocation);
+	}
+
+	PlayCameraShake(LoadedMeleeImpactCameraShake, 0.35f);
+}
+
+void AMMOCharacter::HandleSwingStarted(AActor* Target)
+{
+	PlayPresentationSound(MMOCharacterSounds::Swing);
+}
+
+void AMMOCharacter::HandleAutoAttackChanged(bool bActive)
+{
+	PlayPresentationSound(bActive ? MMOCharacterSounds::AutoAttackOn : MMOCharacterSounds::AutoAttackOff);
+}
+
+void AMMOCharacter::PlayPresentationSound(FName Key, const FVector* Location) const
+{
+	const TObjectPtr<USoundBase>* Sound = LoadedSounds.Find(Key);
+	if (!Sound || !*Sound)
+	{
+		return;
+	}
+
+	if (Location)
+	{
+		UGameplayStatics::PlaySoundAtLocation(this, *Sound, *Location);
+	}
+	else
+	{
+		UGameplayStatics::PlaySound2D(this, *Sound);
+	}
+}
+
+void AMMOCharacter::PlayCameraShake(TSubclassOf<UCameraShakeBase> Shake, float Scale) const
+{
+	const APlayerController* PC = Cast<APlayerController>(GetController());
+	if (Shake && PC && PC->PlayerCameraManager)
+	{
+		PC->PlayerCameraManager->StartCameraShake(Shake, Scale);
 	}
 }
 

@@ -13,7 +13,8 @@ AMMOGameMode::AMMOGameMode()
 	HUDClass = AMMOHUD::StaticClass();
 
 	PrototypeCreatureClass = AMMOGreyWolf::StaticClass();
-	PrototypeCreatureOffsets = { FVector(1300.0f, -500.0f, 0.0f), FVector(1500.0f, 700.0f, 0.0f) };
+	// one lone wolf, plus a pair close enough to pull together
+	PrototypeCreatureOffsets = { FVector(1300.0f, -500.0f, 0.0f), FVector(1700.0f, 650.0f, 0.0f), FVector(1750.0f, 1050.0f, 0.0f) };
 }
 
 void AMMOGameMode::StartPlay()

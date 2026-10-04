@@ -5,13 +5,16 @@
 #include "CoreMinimal.h"
 #include "GameFramework/Character.h"
 #include "Logging/LogMacros.h"
+#include "Combat/MMOMeleeAttacker.h"
 #include "MMOCharacter.generated.h"
 
 class USpringArmComponent;
 class UCameraComponent;
 class UInputAction;
 class UInputMappingContext;
-class UAnimSequenceBase;
+class USoundBase;
+class UNiagaraSystem;
+class UCameraShakeBase;
 class UMMOHealthComponent;
 class UMMOProgressionComponent;
 class UMMOCombatComponent;
@@ -24,7 +27,7 @@ DECLARE_LOG_CATEGORY_EXTERN(LogTemplateCharacter, Log, All);
  *  Implements a controllable orbiting camera
  */
 UCLASS(abstract)
-class AMMOCharacter : public ACharacter
+class AMMOCharacter : public ACharacter, public IMMOMeleeAttacker
 {
 	GENERATED_BODY()
 
@@ -74,9 +77,17 @@ protected:
 	UPROPERTY(EditAnywhere, Category="Input|Combat")
 	TObjectPtr<UInputAction> CycleTargetAction;
 
-	/** Basic Attack. If unset, a runtime action bound to 1 is created */
+	/** Toggle auto-attack. If unset, a runtime action bound to 1 is created */
 	UPROPERTY(EditAnywhere, Category="Input|Combat")
 	TObjectPtr<UInputAction> BasicAttackAction;
+
+	/** Clear the current target. If unset, a runtime action bound to Escape is created */
+	UPROPERTY(EditAnywhere, Category="Input|Combat")
+	TObjectPtr<UInputAction> ClearTargetAction;
+
+	/** Camera zoom (axis). If unset, a runtime action bound to the mouse wheel is created */
+	UPROPERTY(EditAnywhere, Category="Input|Camera")
+	TObjectPtr<UInputAction> ZoomAction;
 
 	/** Mapping context for the combat actions. If unset, one is created at runtime with the default keys */
 	UPROPERTY(EditAnywhere, Category="Input|Combat")
@@ -102,12 +113,86 @@ protected:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Combat|Death", meta=(ClampMin=0, Units="s"))
 	float RespawnDelay = 5.0f;
 
-	/** Animation played on Basic Attack (uses the anim blueprint's DefaultSlot) */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Combat|Presentation")
-	TObjectPtr<UAnimSequenceBase> BasicAttackAnimation;
+	/** Camera distance at spawn */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Camera", meta=(ClampMin=0, Units="cm"))
+	float CameraDefaultDistance = 550.0f;
 
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Combat|Presentation", meta=(ClampMin=0.1))
-	float BasicAttackAnimationPlayRate = 1.4f;
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Camera", meta=(ClampMin=0, Units="cm"))
+	float CameraMinDistance = 250.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Camera", meta=(ClampMin=0, Units="cm"))
+	float CameraMaxDistance = 1100.0f;
+
+	/** Distance change per mouse wheel notch */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Camera", meta=(ClampMin=0, Units="cm"))
+	float CameraZoomStep = 75.0f;
+
+	/** How quickly the camera eases to the requested zoom */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Camera", meta=(ClampMin=0))
+	float CameraZoomSpeed = 8.0f;
+
+	/** Raises the camera a little so targets in front of the character stay visible */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Camera")
+	FVector CameraSocketOffset = FVector(0.0f, 0.0f, 55.0f);
+
+	/** Camera follow smoothing (0 disables lag) */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Camera", meta=(ClampMin=0))
+	float CameraLagSpeed = 14.0f;
+
+	/** Initial downward camera pitch */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Camera", meta=(Units="deg"))
+	float CameraInitialPitch = -15.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Combat|Audio")
+	TSoftObjectPtr<USoundBase> SwingSound;
+
+	/** Played when Basic Attack connects */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Combat|Audio")
+	TSoftObjectPtr<USoundBase> MeleeImpactSound;
+
+	/** Played when the player takes damage */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Combat|Audio")
+	TSoftObjectPtr<USoundBase> HurtSound;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Combat|Audio")
+	TSoftObjectPtr<USoundBase> LevelUpSound;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Combat|Audio")
+	TSoftObjectPtr<USoundBase> AutoAttackOnSound;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Combat|Audio")
+	TSoftObjectPtr<USoundBase> AutoAttackOffSound;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Combat|Audio")
+	TSoftObjectPtr<USoundBase> DeathSound;
+
+	/** Effect spawned on the target when Basic Attack connects */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Combat|Effects")
+	TSoftObjectPtr<UNiagaraSystem> MeleeImpactEffect;
+
+	/** Small camera shake when Basic Attack connects */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Combat|Effects")
+	TSoftClassPtr<UCameraShakeBase> MeleeImpactCameraShake;
+
+	/** Camera shake when the player takes damage */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Combat|Effects")
+	TSoftClassPtr<UCameraShakeBase> HurtCameraShake;
+
+	/** Loaded presentation assets */
+	UPROPERTY(Transient)
+	TMap<FName, TObjectPtr<USoundBase>> LoadedSounds;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UNiagaraSystem> LoadedMeleeImpactEffect;
+
+	UPROPERTY(Transient)
+	TSubclassOf<UCameraShakeBase> LoadedMeleeImpactCameraShake;
+
+	UPROPERTY(Transient)
+	TSubclassOf<UCameraShakeBase> LoadedHurtCameraShake;
+
+	/** Zoom distance the camera is easing toward */
+	float DesiredCameraDistance = 550.0f;
 
 	/** Base stats captured at BeginPlay, before level bonuses */
 	float BaseMaxHealth = 100.0f;
@@ -160,7 +245,31 @@ protected:
 	UFUNCTION()
 	void HandleBasicAttack(AActor* Target, float Damage);
 
+	UFUNCTION()
+	void HandleSwingStarted(AActor* Target);
+
+	UFUNCTION()
+	void HandleAutoAttackChanged(bool bActive);
+
 	void TickRegeneration();
+
+	/** Mouse wheel zoom input */
+	void Zoom(const FInputActionValue& Value);
+
+	/** Plays a loaded presentation sound by key (see BeginPlay) */
+	void PlayPresentationSound(FName Key, const FVector* Location = nullptr) const;
+
+	void PlayCameraShake(TSubclassOf<UCameraShakeBase> Shake, float Scale) const;
+
+public:
+
+	virtual void Tick(float DeltaSeconds) override;
+
+	//~ Begin IMMOMeleeAttacker
+	virtual void NotifyMeleeHitFrame() override;
+	//~ End IMMOMeleeAttacker
+
+protected:
 
 	void RespawnPlayer();
 
@@ -198,9 +307,20 @@ public:
 	UFUNCTION(BlueprintCallable, Category="Input")
 	virtual void DoCycleTarget();
 
-	/** Uses Basic Attack on the current target */
+	/** Toggles auto-attack on the current target */
 	UFUNCTION(BlueprintCallable, Category="Input")
 	virtual void DoBasicAttack();
+
+	/** Clears the current target */
+	UFUNCTION(BlueprintCallable, Category="Input")
+	virtual void DoClearTarget();
+
+	/** Zooms the camera (positive = in) */
+	UFUNCTION(BlueprintCallable, Category="Input")
+	virtual void DoZoom(float Amount);
+
+	/** Distance the camera is easing toward */
+	float GetDesiredCameraDistance() const { return DesiredCameraDistance; }
 
 	/** True while dead and waiting to respawn */
 	UFUNCTION(BlueprintPure, Category="Combat")

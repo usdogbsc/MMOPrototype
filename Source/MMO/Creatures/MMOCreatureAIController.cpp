@@ -5,6 +5,7 @@
 #include "Combat/MMOCombatComponent.h"
 #include "Combat/MMOHealthComponent.h"
 #include "Kismet/GameplayStatics.h"
+#include "Navigation/PathFollowingComponent.h"
 #include "MMO.h"
 
 AMMOCreatureAIController::AMMOCreatureAIController()
@@ -44,13 +45,20 @@ void AMMOCreatureAIController::NotifyDamagedBy(AActor* DamageInstigator)
 void AMMOCreatureAIController::NotifyPawnDied()
 {
 	ThreatTarget.Reset();
+	StopMoving();
 	SetState(EMMOCreatureAIState::Dead);
 }
 
 void AMMOCreatureAIController::NotifyPawnRespawned()
 {
 	ThreatTarget.Reset();
+	StopMoving();
 	SetState(EMMOCreatureAIState::Idle);
+}
+
+bool AMMOCreatureAIController::IsUsingNavigation() const
+{
+	return GetPathFollowingComponent() && GetPathFollowingComponent()->GetStatus() == EPathFollowingStatus::Moving;
 }
 
 void AMMOCreatureAIController::SetState(EMMOCreatureAIState NewState)
@@ -63,11 +71,17 @@ void AMMOCreatureAIController::SetState(EMMOCreatureAIState NewState)
 	UE_LOG(LogMMO, Verbose, TEXT("%s: %s -> %s"), *GetNameSafe(GetPawn()),
 		*UEnum::GetValueAsString(State), *UEnum::GetValueAsString(NewState));
 
+	const EMMOCreatureAIState OldState = State;
 	State = NewState;
 
 	if (AMMOCreature* Creature = GetCreature())
 	{
 		Creature->SetEvading(State == EMMOCreatureAIState::Returning);
+
+		if (OldState == EMMOCreatureAIState::Idle && State == EMMOCreatureAIState::Chasing)
+		{
+			Creature->OnAggro(ThreatTarget.Get());
+		}
 	}
 }
 
@@ -87,18 +101,22 @@ bool AMMOCreatureAIController::IsValidThreat(const AActor* Target)
 	return Health && !Health->IsDead();
 }
 
-void AMMOCreatureAIController::TickIdle(AMMOCreature* Creature)
+AActor* AMMOCreatureAIController::ChooseThreat(const AMMOCreature* Creature) const
 {
 	// single-player prototype: the only potential threat is the local player
 	APawn* Player = UGameplayStatics::GetPlayerPawn(this, 0);
-	if (!IsValidThreat(Player))
+	if (IsValidThreat(Player) && FVector::Dist(Creature->GetActorLocation(), Player->GetActorLocation()) <= Creature->AggroRange)
 	{
-		return;
+		return Player;
 	}
+	return nullptr;
+}
 
-	if (FVector::Dist(Creature->GetActorLocation(), Player->GetActorLocation()) <= Creature->AggroRange)
+void AMMOCreatureAIController::TickIdle(AMMOCreature* Creature)
+{
+	if (AActor* Threat = ChooseThreat(Creature))
 	{
-		ThreatTarget = Player;
+		ThreatTarget = Threat;
 		SetState(EMMOCreatureAIState::Chasing);
 	}
 }
@@ -114,11 +132,12 @@ void AMMOCreatureAIController::TickChasing(AMMOCreature* Creature)
 	AActor* Target = ThreatTarget.Get();
 	if (UMMOCombatComponent::GetEdgeDistance(Creature, Target) <= Creature->AttackRange)
 	{
+		StopMoving();
 		SetState(EMMOCreatureAIState::Attacking);
 		return;
 	}
 
-	SteerToward(Creature, Target->GetActorLocation());
+	MoveTowardGoal(Creature, Target);
 }
 
 void AMMOCreatureAIController::TickAttacking(AMMOCreature* Creature, float DeltaSeconds)
@@ -129,8 +148,15 @@ void AMMOCreatureAIController::TickAttacking(AMMOCreature* Creature, float Delta
 		return;
 	}
 
+	// commit to an attack in progress: no turning or moving until the bite resolves
+	if (Creature->IsAttacking())
+	{
+		return;
+	}
+
 	AActor* Target = ThreatTarget.Get();
-	if (UMMOCombatComponent::GetEdgeDistance(Creature, Target) > Creature->AttackRange + AttackRangeHysteresis)
+	const float Distance = UMMOCombatComponent::GetEdgeDistance(Creature, Target);
+	if (Distance > Creature->AttackRange + AttackRangeHysteresis)
 	{
 		SetState(EMMOCreatureAIState::Chasing);
 		return;
@@ -141,12 +167,11 @@ void AMMOCreatureAIController::TickAttacking(AMMOCreature* Creature, float Delta
 	ToTarget.Z = 0.0f;
 	if (!ToTarget.IsNearlyZero())
 	{
-		const FRotator Desired = ToTarget.Rotation();
-		Creature->SetActorRotation(FMath::RInterpTo(Creature->GetActorRotation(), Desired, DeltaSeconds, 10.0f));
+		Creature->SetActorRotation(FMath::RInterpTo(Creature->GetActorRotation(), ToTarget.Rotation(), DeltaSeconds, 10.0f));
 	}
 
-	// the target may have closed in just inside the hysteresis band: nudge forward rather than attack from too far
-	if (UMMOCombatComponent::GetEdgeDistance(Creature, Target) > Creature->AttackRange)
+	// inside the hysteresis band: close the small gap rather than attack from too far
+	if (Distance > Creature->AttackRange)
 	{
 		SteerToward(Creature, Target->GetActorLocation());
 		return;
@@ -164,6 +189,7 @@ void AMMOCreatureAIController::TickReturning(AMMOCreature* Creature)
 	if (FVector::Dist2D(Creature->GetActorLocation(), Home.GetLocation()) <= HomeAcceptanceRadius)
 	{
 		// classic MMO reset: back home at full health
+		StopMoving();
 		Creature->SetActorRotation(Home.Rotator());
 		Creature->GetHealth()->ResetHealth();
 		ThreatTarget.Reset();
@@ -171,7 +197,7 @@ void AMMOCreatureAIController::TickReturning(AMMOCreature* Creature)
 		return;
 	}
 
-	SteerToward(Creature, Home.GetLocation());
+	MoveTowardGoal(Creature, nullptr);
 }
 
 bool AMMOCreatureAIController::ShouldReturn(const AMMOCreature* Creature) const
@@ -182,6 +208,55 @@ bool AMMOCreatureAIController::ShouldReturn(const AMMOCreature* Creature) const
 	}
 
 	return FVector::Dist2D(Creature->GetActorLocation(), Creature->GetSpawnTransform().GetLocation()) > Creature->LeashRange;
+}
+
+void AMMOCreatureAIController::MoveTowardGoal(AMMOCreature* Creature, AActor* Goal)
+{
+	const bool bGoalIsHome = Goal == nullptr;
+	const FVector Destination = bGoalIsHome ? Creature->GetSpawnTransform().GetLocation() : Goal->GetActorLocation();
+
+	// recovering from a failed path request: steer directly for a moment
+	if (GetWorld()->GetTimeSeconds() < DirectSteerUntil)
+	{
+		SteerToward(Creature, Destination);
+		return;
+	}
+
+	// already following a path to this goal (moving goals are tracked by the path following component)
+	if (IsUsingNavigation() && bMovingHome == bGoalIsHome && MoveGoalActor.Get() == Goal)
+	{
+		return;
+	}
+
+	EPathFollowingRequestResult::Type Result;
+	if (bGoalIsHome)
+	{
+		Result = MoveToLocation(Destination, HomeAcceptanceRadius * 0.5f, false, true, true, false, nullptr, true);
+	}
+	else
+	{
+		Result = MoveToActor(Goal, Creature->AttackRange * 0.5f, true, true, false, nullptr, true);
+	}
+
+	if (Result == EPathFollowingRequestResult::Failed)
+	{
+		UE_LOG(LogMMO, Verbose, TEXT("%s: path request failed, steering directly"), *GetNameSafe(Creature));
+		DirectSteerUntil = GetWorld()->GetTimeSeconds() + NavigationRetryDelay;
+		MoveGoalActor.Reset();
+		SteerToward(Creature, Destination);
+		return;
+	}
+
+	MoveGoalActor = Goal;
+	bMovingHome = bGoalIsHome;
+}
+
+void AMMOCreatureAIController::StopMoving()
+{
+	StopMovement();
+	MoveGoalActor.Reset();
+	bMovingHome = false;
+	DirectSteerUntil = 0.0;
 }
 
 void AMMOCreatureAIController::SteerToward(AMMOCreature* Creature, const FVector& Destination)

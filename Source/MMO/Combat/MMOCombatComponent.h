@@ -8,8 +8,9 @@
 
 class IMMOTargetable;
 class UMMOHealthComponent;
+class UAnimSequenceBase;
 
-/** Outcome of a basic attack request */
+/** Outcome of an attack request */
 UENUM(BlueprintType)
 enum class EMMOAttackResult : uint8
 {
@@ -23,11 +24,15 @@ enum class EMMOAttackResult : uint8
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FMMOTargetChangedSignature, AActor*, NewTarget);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FMMOBasicAttackSignature, AActor*, Target, float, Damage);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FMMOSwingSignature, AActor*, Target);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FMMOAutoAttackChangedSignature, bool, bActive);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FMMOCombatErrorSignature, const FText&, Message);
 
 /**
- *  Player-side targeting and the Basic Attack action.
- *  Owns the current combat target and the rules for attacking it (living target, range, cooldown).
+ *  Player-side targeting and classic MMO auto-attack.
+ *  While auto-attack is active, a melee swing starts whenever the swing timer is ready and the target is in range.
+ *  Each swing's damage is applied on the attack animation's hit frame (UMMOAnimNotify_MeleeHit),
+ *  after re-validating the target and range.
  */
 UCLASS(ClassGroup=(MMO), meta=(BlueprintSpawnableComponent))
 class UMMOCombatComponent : public UActorComponent
@@ -38,17 +43,40 @@ public:
 
 	UMMOCombatComponent();
 
-	/** Damage dealt by Basic Attack at level 1 (level bonuses are applied by the owner) */
+	/** Damage dealt per swing at level 1 (level bonuses are applied by the owner) */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Combat|Basic Attack", meta=(ClampMin=0))
 	float BasicAttackDamage = 12.0f;
 
-	/** Max gap between the attacker's and target's collision edges, in cm */
+	/** Max gap between the attacker's and target's collision edges to start a swing, in cm */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Combat|Basic Attack", meta=(ClampMin=0, Units="cm"))
 	float BasicAttackRange = 150.0f;
 
-	/** Seconds between Basic Attacks */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Combat|Basic Attack", meta=(ClampMin=0.1, Units="s"))
-	float BasicAttackCooldown = 1.5f;
+	/** Seconds between swings (the swing timer) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Combat|Basic Attack", meta=(ClampMin=0.1, Units="s", DisplayName="Swing Interval"))
+	float BasicAttackCooldown = 1.8f;
+
+	/** Extra range allowed at the hit frame, so a target stepping back mid-swing is still hit */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Combat|Basic Attack", meta=(ClampMin=0, Units="cm"))
+	float HitRangeTolerance = 60.0f;
+
+	/** Minimum seconds between repeated "Out of Range" messages */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Combat|Basic Attack", meta=(ClampMin=0, Units="s"))
+	float OutOfRangeMessageInterval = 2.0f;
+
+	/** Swing animation. Its MMO Melee Hit notify times the damage. Root motion should be disabled so the player can keep moving */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Combat|Animation")
+	TSoftObjectPtr<UAnimSequenceBase> SwingAnimation;
+
+	/** Anim blueprint slot used for the swing. Use an upper-body slot to swing while running */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Combat|Animation")
+	FName SwingSlotName = TEXT("DefaultSlot");
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Combat|Animation", meta=(ClampMin=0.1))
+	float SwingPlayRate = 1.0f;
+
+	/** Hit timing used only when the swing animation is missing or has no MMO Melee Hit notify */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Combat|Animation", meta=(ClampMin=0, Units="s"))
+	float FallbackHitDelay = 0.35f;
 
 	/** Max distance for selecting a target */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Combat|Targeting", meta=(ClampMin=0, Units="cm"))
@@ -65,10 +93,18 @@ public:
 	UPROPERTY(BlueprintAssignable, Category="Combat")
 	FMMOTargetChangedSignature OnTargetChanged;
 
+	/** A swing started (animation begins) */
+	UPROPERTY(BlueprintAssignable, Category="Combat")
+	FMMOSwingSignature OnSwingStarted;
+
+	/** A swing connected and dealt damage */
 	UPROPERTY(BlueprintAssignable, Category="Combat")
 	FMMOBasicAttackSignature OnBasicAttack;
 
-	/** Player-facing error such as "Target is out of range" */
+	UPROPERTY(BlueprintAssignable, Category="Combat")
+	FMMOAutoAttackChangedSignature OnAutoAttackChanged;
+
+	/** Player-facing error such as "Out of Range" */
 	UPROPERTY(BlueprintAssignable, Category="Combat")
 	FMMOCombatErrorSignature OnCombatError;
 
@@ -77,21 +113,43 @@ protected:
 	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category="Combat")
 	TObjectPtr<AActor> CurrentTarget;
 
-	/** World time of the last Basic Attack */
-	double LastAttackTime = -1000.0;
+	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category="Combat")
+	bool bAutoAttackActive = false;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UAnimSequenceBase> LoadedSwingAnimation;
+
+	/** World time the last swing started */
+	double LastSwingTime = -1000.0;
+
+	/** True between a swing starting and its hit frame */
+	bool bSwingPending = false;
+
+	TWeakObjectPtr<AActor> PendingSwingTarget;
+
+	/** True if the last hit was timed by the animation notify (false = fallback timer) */
+	bool bLastHitFromNotify = false;
+
+	double LastOutOfRangeMessageTime = -1000.0;
+
+	/** How many "Out of Range" warnings have been shown (for testing the throttle) */
+	int32 OutOfRangeWarningCount = 0;
+
+	FTimerHandle SwingResolveTimer;
 
 public:
 
+	virtual void BeginPlay() override;
 	virtual void TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction) override;
 
-	/** Selects a target. Passing null or an untargetable actor clears the target */
+	/** Selects a target. Passing null or an untargetable actor clears the target (and stops auto-attack) */
 	UFUNCTION(BlueprintCallable, Category="Combat")
 	void SetTarget(AActor* NewTarget);
 
 	UFUNCTION(BlueprintCallable, Category="Combat")
 	void ClearTarget() { SetTarget(nullptr); }
 
-	/** Targets whatever is closest to the camera's aim. Clears the target if nothing is aimed at */
+	/** Targets whatever the camera is aimed at. Clears the target if nothing is aimed at */
 	UFUNCTION(BlueprintCallable, Category="Combat")
 	void TargetFromView();
 
@@ -99,18 +157,42 @@ public:
 	UFUNCTION(BlueprintCallable, Category="Combat")
 	bool CycleTarget();
 
-	/** Attempts the Basic Attack on the current target. Auto-selects a nearby target if none */
+	/** Turns auto-attack on (auto-selecting a nearby target if needed) or off */
 	UFUNCTION(BlueprintCallable, Category="Combat")
-	EMMOAttackResult TryBasicAttack();
+	EMMOAttackResult ToggleAutoAttack();
+
+	UFUNCTION(BlueprintCallable, Category="Combat")
+	EMMOAttackResult StartAutoAttack();
+
+	UFUNCTION(BlueprintCallable, Category="Combat")
+	void StopAutoAttack();
+
+	/** Called on the swing animation's hit frame */
+	void NotifyMeleeHitFrame();
 
 	UFUNCTION(BlueprintPure, Category="Combat")
 	AActor* GetCurrentTarget() const { return CurrentTarget; }
 
 	UFUNCTION(BlueprintPure, Category="Combat")
+	bool IsAutoAttacking() const { return bAutoAttackActive; }
+
+	UFUNCTION(BlueprintPure, Category="Combat")
+	bool IsSwingPending() const { return bSwingPending; }
+
+	/** True if there is a target and it is within Basic Attack range */
+	UFUNCTION(BlueprintPure, Category="Combat")
+	bool IsTargetInRange() const;
+
+	/** Seconds until the swing timer is ready */
+	UFUNCTION(BlueprintPure, Category="Combat")
 	float GetBasicAttackCooldownRemaining() const;
 
-	/** World time of the last attack this component made (used for out-of-combat checks) */
-	double GetLastAttackTime() const { return LastAttackTime; }
+	/** World time of the last swing (used for out-of-combat checks) */
+	double GetLastAttackTime() const { return LastSwingTime; }
+
+	bool WasLastHitFromNotify() const { return bLastHitFromNotify; }
+
+	int32 GetOutOfRangeWarningCount() const { return OutOfRangeWarningCount; }
 
 	/** Gap between two actors' collision edges on the horizontal plane */
 	static float GetEdgeDistance(const AActor* A, const AActor* B);
@@ -120,10 +202,18 @@ public:
 
 protected:
 
+	/** Starts a swing at the current target */
+	void BeginSwing();
+
+	/** Applies the pending swing's damage if the target is still alive and in reach */
+	void ResolveSwing();
+
+	void WarnOutOfRange();
+
 	/** Gathers living targetable actors within range, with their angle from the view direction */
 	void GatherCandidates(float MaxAngleDegrees, TArray<TPair<AActor*, float>>& OutCandidates) const;
 
 	void GetViewPoint(FVector& OutLocation, FRotator& OutRotation) const;
 
-	EMMOAttackResult FailAttack(EMMOAttackResult Result, const FText& Message);
+	EMMOAttackResult Fail(EMMOAttackResult Result, const FText& Message);
 };
