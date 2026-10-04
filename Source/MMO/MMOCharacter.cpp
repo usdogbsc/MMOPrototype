@@ -191,6 +191,8 @@ void AMMOCharacter::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
 
+	UpdateHoverCursor();
+
 	// ease toward the requested zoom distance
 	USpringArmComponent* Boom = GetCameraBoom();
 	if (!FMath::IsNearlyEqual(Boom->TargetArmLength, DesiredCameraDistance, 0.5f))
@@ -211,7 +213,10 @@ void AMMOCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputCompon
 
 		// Combat
 		CreateDefaultCombatInput();
-		EnhancedInputComponent->BindAction(TargetAction, ETriggerEvent::Started, this, &AMMOCharacter::DoTarget);
+		EnhancedInputComponent->BindAction(TargetAction, ETriggerEvent::Started, this, &AMMOCharacter::OnLeftMousePressed);
+		EnhancedInputComponent->BindAction(TargetAction, ETriggerEvent::Completed, this, &AMMOCharacter::OnLeftMouseReleased);
+		EnhancedInputComponent->BindAction(RightClickAction, ETriggerEvent::Started, this, &AMMOCharacter::OnRightMousePressed);
+		EnhancedInputComponent->BindAction(RightClickAction, ETriggerEvent::Completed, this, &AMMOCharacter::OnRightMouseReleased);
 		EnhancedInputComponent->BindAction(CycleTargetAction, ETriggerEvent::Started, this, &AMMOCharacter::DoCycleTarget);
 		EnhancedInputComponent->BindAction(BasicAttackAction, ETriggerEvent::Started, this, &AMMOCharacter::DoBasicAttack);
 		EnhancedInputComponent->BindAction(ClearTargetAction, ETriggerEvent::Started, this, &AMMOCharacter::DoClearTarget);
@@ -230,7 +235,7 @@ void AMMOCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputCompon
 
 		// Moving
 		EnhancedInputComponent->BindAction(MoveAction, ETriggerEvent::Triggered, this, &AMMOCharacter::Move);
-		EnhancedInputComponent->BindAction(MouseLookAction, ETriggerEvent::Triggered, this, &AMMOCharacter::Look);
+		EnhancedInputComponent->BindAction(MouseLookAction, ETriggerEvent::Triggered, this, &AMMOCharacter::MouseLook);
 
 		// Looking
 		EnhancedInputComponent->BindAction(LookAction, ETriggerEvent::Triggered, this, &AMMOCharacter::Look);
@@ -281,13 +286,6 @@ void AMMOCharacter::DoMove(float Right, float Forward)
 
 void AMMOCharacter::DoLook(float Yaw, float Pitch)
 {
-	// while windows are open the mouse drives the cursor, not the camera
-	const APlayerController* PC = Cast<APlayerController>(GetController());
-	if (PC && PC->bShowMouseCursor)
-	{
-		return;
-	}
-
 	if (GetController() != nullptr)
 	{
 		// add yaw and pitch input to controller
@@ -340,7 +338,8 @@ void AMMOCharacter::CreateDefaultCombatInput()
 	EnsureAction(BasicAttackAction, TEXT("IA_MMOBasicAttack_Runtime"), EKeys::One);
 	EnsureAction(ClearTargetAction, TEXT("IA_MMOClearTarget_Runtime"), EKeys::Escape);
 	EnsureAction(ZoomAction, TEXT("IA_MMOZoom_Runtime"), EKeys::MouseWheelAxis, EInputActionValueType::Axis1D);
-	EnsureAction(InteractAction, TEXT("IA_MMOInteract_Runtime"), EKeys::F, EInputActionValueType::Boolean, EKeys::RightMouseButton);
+	EnsureAction(InteractAction, TEXT("IA_MMOInteract_Runtime"), EKeys::F);
+	EnsureAction(RightClickAction, TEXT("IA_MMORightClick_Runtime"), EKeys::RightMouseButton);
 	EnsureAction(InventoryAction, TEXT("IA_MMOInventory_Runtime"), EKeys::B, EInputActionValueType::Boolean, EKeys::I);
 	EnsureAction(CharacterAction, TEXT("IA_MMOCharacter_Runtime"), EKeys::C);
 
@@ -363,14 +362,14 @@ void AMMOCharacter::DoTarget()
 		return;
 	}
 
-	// with the cursor visible (windows open), click-target what is under the cursor
-	APlayerController* PC = Cast<APlayerController>(GetController());
+	// select what is under the mouse cursor; clicking empty ground clears the target
+	const APlayerController* PC = Cast<APlayerController>(GetController());
 	if (PC && PC->bShowMouseCursor)
 	{
-		FHitResult Hit;
-		if (PC->GetHitResultUnderCursor(ECC_Pawn, false, Hit) && Cast<IMMOTargetable>(Hit.GetActor()) && Cast<IMMOTargetable>(Hit.GetActor())->IsTargetable())
+		AMMOCreature* Creature = GetCreatureUnderCursor();
+		if (Creature && Creature->IsTargetable())
 		{
-			Combat->SetTarget(Hit.GetActor());
+			Combat->SetTarget(Creature);
 		}
 		else
 		{
@@ -379,6 +378,7 @@ void AMMOCharacter::DoTarget()
 		return;
 	}
 
+	// no cursor (e.g. gamepad): pick what the camera is aimed at
 	Combat->TargetFromView();
 }
 
@@ -567,21 +567,13 @@ AMMOCreature* AMMOCharacter::FindLootableCorpse(bool& bOutTooFar) const
 {
 	bOutTooFar = false;
 
-	// with the cursor visible: whatever corpse is under it
-	const APlayerController* PC = Cast<APlayerController>(GetController());
-	if (PC && PC->bShowMouseCursor)
+	// prefer the corpse under the mouse cursor
+	if (AMMOCreature* Corpse = GetCreatureUnderCursor())
 	{
-		FHitResult Hit;
-		if (PC->GetHitResultUnderCursor(ECC_Visibility, false, Hit))
+		if (Corpse->IsLootable())
 		{
-			if (AMMOCreature* Corpse = Cast<AMMOCreature>(Hit.GetActor()))
-			{
-				if (Corpse->IsLootable())
-				{
-					bOutTooFar = FVector::Dist2D(Corpse->GetActorLocation(), GetActorLocation()) > InteractRange;
-					return bOutTooFar ? nullptr : Corpse;
-				}
-			}
+			bOutTooFar = FVector::Dist2D(Corpse->GetActorLocation(), GetActorLocation()) > InteractRange;
+			return bOutTooFar ? nullptr : Corpse;
 		}
 	}
 
@@ -612,6 +604,175 @@ AMMOCreature* AMMOCharacter::FindLootableCorpse(bool& bOutTooFar) const
 		bOutTooFar = false;
 	}
 	return Best;
+}
+
+void AMMOCharacter::MouseLook(const FInputActionValue& Value)
+{
+	// classic MMO controls: the cursor is free; holding a mouse button and dragging turns the camera
+	const APlayerController* PC = Cast<APlayerController>(GetController());
+	if (PC && PC->bShowMouseCursor && !bLeftMouseHeld && !bRightMouseHeld)
+	{
+		return;
+	}
+
+	const FVector2D Delta = Value.Get<FVector2D>();
+	const float Moved = FMath::Abs(Delta.X) + FMath::Abs(Delta.Y);
+	if (bLeftMouseHeld)
+	{
+		LeftMouseDrag += Moved;
+	}
+	if (bRightMouseHeld)
+	{
+		RightMouseDrag += Moved;
+	}
+
+	DoLook(Delta.X, Delta.Y);
+}
+
+void AMMOCharacter::OnLeftMousePressed()
+{
+	bLeftMouseHeld = true;
+	LeftMouseDrag = 0.0f;
+}
+
+void AMMOCharacter::OnLeftMouseReleased()
+{
+	// a click (not a camera drag) selects what is under the cursor
+	const bool bWasClick = bLeftMouseHeld && LeftMouseDrag < ClickDragThreshold;
+	bLeftMouseHeld = false;
+	if (bWasClick)
+	{
+		DoTarget();
+	}
+}
+
+void AMMOCharacter::OnRightMousePressed()
+{
+	bRightMouseHeld = true;
+	RightMouseDrag = 0.0f;
+}
+
+void AMMOCharacter::OnRightMouseReleased()
+{
+	const bool bWasClick = bRightMouseHeld && RightMouseDrag < ClickDragThreshold;
+	bRightMouseHeld = false;
+	if (bWasClick && !IsDead())
+	{
+		InteractWith(GetCreatureUnderCursor());
+	}
+}
+
+void AMMOCharacter::InteractWith(AMMOCreature* Creature)
+{
+	if (!Creature || IsDead())
+	{
+		return;
+	}
+
+	// corpse: loot it
+	if (Creature->IsLootable())
+	{
+		if (FVector::Dist2D(Creature->GetActorLocation(), GetActorLocation()) > InteractRange)
+		{
+			ShowPlayerMessage(NSLOCTEXT("MMOItems", "TooFar", "You are too far away."));
+			return;
+		}
+		if (AMMOHUD* HUD = Cast<AMMOHUD>(Cast<APlayerController>(GetController())->GetHUD()))
+		{
+			HUD->OpenLoot(Creature->GetLoot());
+		}
+		return;
+	}
+
+	// living enemy: target it and start auto-attacking
+	if (Creature->IsTargetable())
+	{
+		Combat->SetTarget(Creature);
+		if (!Combat->IsAutoAttacking())
+		{
+			Combat->StartAutoAttack();
+		}
+	}
+}
+
+AMMOCreature* AMMOCharacter::GetCreatureUnderCursor() const
+{
+	const APlayerController* PC = Cast<APlayerController>(GetController());
+	FVector Origin, Direction;
+	if (!PC || !PC->bShowMouseCursor || !PC->DeprojectMousePositionToWorld(Origin, Direction))
+	{
+		return nullptr;
+	}
+	return FindCreatureAlongRay(GetWorld(), Origin, Direction, 6000.0f, this);
+}
+
+AMMOCreature* AMMOCharacter::FindCreatureAlongRay(const UWorld* World, const FVector& Origin, const FVector& Direction, float MaxDistance, const AActor* Ignore)
+{
+	if (!World)
+	{
+		return nullptr;
+	}
+
+	// test against each creature's body directly, so clicks work regardless of collision settings (corpses included)
+	AMMOCreature* Best = nullptr;
+	float BestAlong = MaxDistance;
+	const FVector Dir = Direction.GetSafeNormal();
+
+	for (TActorIterator<AMMOCreature> It(const_cast<UWorld*>(World)); It; ++It)
+	{
+		AMMOCreature* Creature = *It;
+		if (Creature->IsHidden())
+		{
+			continue;
+		}
+
+		const FVector Center = Creature->GetActorLocation();
+		const float Along = FVector::DotProduct(Center - Origin, Dir);
+		if (Along <= 0.0f || Along >= BestAlong)
+		{
+			continue;
+		}
+
+		const float Radius = FMath::Max(60.0f, Creature->GetCapsuleComponent()->GetScaledCapsuleRadius() * 1.3f);
+		if (FVector::Dist(Origin + Dir * Along, Center) > Radius)
+		{
+			continue;
+		}
+
+		// not through walls
+		FCollisionQueryParams Params(SCENE_QUERY_STAT(MMOCursorPick), false, Ignore);
+		Params.AddIgnoredActor(Creature);
+		FHitResult Hit;
+		if (World->LineTraceSingleByChannel(Hit, Origin, Center, ECC_Visibility, Params))
+		{
+			continue;
+		}
+
+		BestAlong = Along;
+		Best = Creature;
+	}
+	return Best;
+}
+
+void AMMOCharacter::UpdateHoverCursor()
+{
+	APlayerController* PC = Cast<APlayerController>(GetController());
+	if (!PC || !PC->IsLocalController() || !PC->bShowMouseCursor)
+	{
+		return;
+	}
+
+	const AMMOCreature* Hovered = GetCreatureUnderCursor();
+	EMouseCursor::Type Cursor = EMouseCursor::Default;
+	if (Hovered && Hovered->IsLootable())
+	{
+		Cursor = EMouseCursor::Hand;
+	}
+	else if (Hovered && Hovered->IsTargetable())
+	{
+		Cursor = EMouseCursor::Crosshairs;
+	}
+	PC->CurrentMouseCursor = Cursor;
 }
 
 void AMMOCharacter::DoInteract()

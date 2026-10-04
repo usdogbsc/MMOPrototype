@@ -89,9 +89,17 @@ protected:
 	UPROPERTY(EditAnywhere, Category="Input")
 	UInputAction* MouseLookAction;
 
-	/** Target under the crosshair. If unset, a runtime action bound to Left Mouse Button is created */
+	/** Left click: select what is under the cursor (drag to turn the camera). If unset, a runtime action bound to Left Mouse Button is created */
 	UPROPERTY(EditAnywhere, Category="Input|Combat")
 	TObjectPtr<UInputAction> TargetAction;
+
+	/** Right click: attack an enemy or loot a corpse under the cursor (drag to turn the camera). If unset, a runtime action bound to Right Mouse Button is created */
+	UPROPERTY(EditAnywhere, Category="Input|Combat")
+	TObjectPtr<UInputAction> RightClickAction;
+
+	/** Mouse movement (in look-axis units) while a button is held before a click counts as a camera drag */
+	UPROPERTY(EditAnywhere, Category="Input|Combat", meta=(ClampMin=0))
+	float ClickDragThreshold = 4.0f;
 
 	/** Cycle to the next nearby target. If unset, a runtime action bound to Tab is created */
 	UPROPERTY(EditAnywhere, Category="Input|Combat")
@@ -109,7 +117,7 @@ protected:
 	UPROPERTY(EditAnywhere, Category="Input|Camera")
 	TObjectPtr<UInputAction> ZoomAction;
 
-	/** Loot a nearby corpse. If unset, a runtime action bound to F and Right Mouse Button is created */
+	/** Loot a nearby corpse. If unset, a runtime action bound to F is created */
 	UPROPERTY(EditAnywhere, Category="Input|Items")
 	TObjectPtr<UInputAction> InteractAction;
 
@@ -249,6 +257,12 @@ protected:
 	/** Zoom distance the camera is easing toward */
 	float DesiredCameraDistance = 550.0f;
 
+	/** Mouse buttons held for camera dragging, and how far the mouse moved since each was pressed */
+	bool bLeftMouseHeld = false;
+	bool bRightMouseHeld = false;
+	float LeftMouseDrag = 0.0f;
+	float RightMouseDrag = 0.0f;
+
 	/** Base max health captured at BeginPlay, before level and gear bonuses */
 	float BaseMaxHealth = 100.0f;
 
@@ -325,6 +339,17 @@ protected:
 	/** Mouse wheel zoom input */
 	void Zoom(const FInputActionValue& Value);
 
+	/** Mouse look: turns the camera only while a mouse button is held (the cursor is free otherwise) */
+	void MouseLook(const FInputActionValue& Value);
+
+	void OnLeftMousePressed();
+	void OnLeftMouseReleased();
+	void OnRightMousePressed();
+	void OnRightMouseReleased();
+
+	/** Shows a hand over lootable corpses and crosshairs over enemies */
+	void UpdateHoverCursor();
+
 	/** Plays a loaded presentation sound by key (see BeginPlay) */
 	void PlayPresentationSound(FName Key, const FVector* Location = nullptr) const;
 
@@ -390,6 +415,15 @@ public:
 
 	/** Distance the camera is easing toward */
 	float GetDesiredCameraDistance() const { return DesiredCameraDistance; }
+
+	/** The creature under the mouse cursor, if any */
+	AMMOCreature* GetCreatureUnderCursor() const;
+
+	/** Nearest visible creature whose body the ray passes through */
+	static AMMOCreature* FindCreatureAlongRay(const UWorld* World, const FVector& Origin, const FVector& Direction, float MaxDistance, const AActor* Ignore);
+
+	/** Right-click behaviour: loot a corpse, or target and auto-attack a living enemy */
+	void InteractWith(AMMOCreature* Creature);
 
 	/** Loots the nearest corpse in reach (opens the loot window) */
 	UFUNCTION(BlueprintCallable, Category="Input")

@@ -40,6 +40,8 @@ void AMMOHUD::BeginPlay()
 
 	LoadedWindowOpenSound = WindowOpenSound.LoadSynchronous();
 	LoadedWindowCloseSound = WindowCloseSound.LoadSynchronous();
+
+	UpdateInputMode();
 }
 
 void AMMOHUD::Tick(float DeltaSeconds)
@@ -135,21 +137,15 @@ void AMMOHUD::UpdateInputMode()
 		return;
 	}
 
-	if (IsAnyWindowOpen())
+	// classic MMO mouse: the cursor is always free; holding a mouse button over the world turns the camera
+	// (the viewport captures the mouse only while a button is down, and hides the cursor during the drag)
+	if (!PlayerOwner->bShowMouseCursor)
 	{
-		if (!PlayerOwner->bShowMouseCursor)
-		{
-			FInputModeGameAndUI Mode;
-			Mode.SetHideCursorDuringCapture(false);
-			Mode.SetLockMouseToViewportBehavior(EMouseLockMode::DoNotLock);
-			PlayerOwner->SetInputMode(Mode);
-			PlayerOwner->SetShowMouseCursor(true);
-		}
-	}
-	else if (PlayerOwner->bShowMouseCursor)
-	{
-		PlayerOwner->SetInputMode(FInputModeGameOnly());
-		PlayerOwner->SetShowMouseCursor(false);
+		FInputModeGameAndUI Mode;
+		Mode.SetHideCursorDuringCapture(true);
+		Mode.SetLockMouseToViewportBehavior(EMouseLockMode::DoNotLock);
+		PlayerOwner->SetInputMode(Mode);
+		PlayerOwner->SetShowMouseCursor(true);
 	}
 }
 

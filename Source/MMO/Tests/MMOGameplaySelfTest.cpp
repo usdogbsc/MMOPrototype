@@ -276,7 +276,8 @@ namespace MMOSelfTest
 			{
 				const AMMOHUD* HUD = HUDOf(Player);
 				Player->DoClearTarget();
-				Check(!HUD->GetHUDWidget()->IsInventoryOpen() && !HUD->GetHUDWidget()->IsCharacterOpen() && !CursorShown(Player), TEXT("Esc closes windows and returns the camera"));
+				Check(!HUD->GetHUDWidget()->IsInventoryOpen() && !HUD->GetHUDWidget()->IsCharacterOpen(), TEXT("Esc closes windows"));
+				Check(CursorShown(Player), TEXT("Mouse cursor stays visible and free with no windows open"));
 				PlacePlayerNear(WolfHome, 600.0f);
 				NextStep();
 			}
@@ -306,15 +307,25 @@ namespace MMOSelfTest
 			}
 			break;
 
-		case 4: // target + auto-attack on; this kill will drop the boots and Greyfang
+		case 4: // right-click the wolf: target + auto-attack; this kill will drop the boots and Greyfang
+		{
 			UMMOLootTable::ForceNextDrop(Greyfang);
 			UMMOLootTable::ForceNextDrop(Boots);
-			Combat->SetTarget(Wolf);
-			Check(Combat->GetCurrentTarget() == Wolf, TEXT("Player can target the wolf"));
-			Check(Combat->StartAutoAttack() == EMMOAttackResult::Success && Combat->IsAutoAttacking(), TEXT("Auto-attack activates on a living target in range"));
+
+			// mouse picking: a ray from the camera through the wolf finds it; a ray beside it does not
+			const APlayerController* PC = Cast<APlayerController>(Player->GetController());
+			const FVector CameraLocation = PC->PlayerCameraManager->GetCameraLocation();
+			const FVector ToWolf = Wolf->GetActorLocation() - CameraLocation;
+			Check(AMMOCharacter::FindCreatureAlongRay(World, CameraLocation, ToWolf, 6000.0f, Player) == Wolf, TEXT("Cursor ray over the wolf picks it"));
+			Check(AMMOCharacter::FindCreatureAlongRay(World, CameraLocation, ToWolf.RotateAngleAxis(25.0f, FVector::UpVector), 6000.0f, Player) != Wolf, TEXT("Cursor ray beside the wolf does not pick it"));
+
+			Player->InteractWith(Wolf);
+			Check(Combat->GetCurrentTarget() == Wolf, TEXT("Right-clicking the wolf targets it"));
+			Check(Combat->IsAutoAttacking(), TEXT("Right-clicking the wolf starts auto-attack"));
 			State->HealthMark = WolfHealth->GetCurrentHealth();
 			NextStep();
 			break;
+		}
 
 		case 5: // swing starts without dealing damage yet
 			if (Combat->IsSwingPending())
@@ -441,8 +452,8 @@ namespace MMOSelfTest
 		case 12: // interact opens the loot window (screenshot it before looting)
 		{
 			const AMMOHUD* HUD = HUDOf(Player);
-			Player->DoInteract();
-			Check(HUD->GetHUDWidget()->IsLootOpen() && HUD->GetHUDWidget()->GetOpenLoot() == Wolf->GetLoot(), TEXT("Interact opens this corpse's loot window"));
+			Player->InteractWith(Wolf);
+			Check(HUD->GetHUDWidget()->IsLootOpen() && HUD->GetHUDWidget()->GetOpenLoot() == Wolf->GetLoot(), TEXT("Right-clicking the corpse opens its loot window"));
 			Check(CursorShown(Player), TEXT("Loot window shows the mouse cursor"));
 			Shot(TEXT("2_LootWindow"));
 			NextStep();
@@ -476,7 +487,7 @@ namespace MMOSelfTest
 		case 14:
 			if (Elapsed() > 0.2f)
 			{
-				Check(!HUDOf(Player)->GetHUDWidget()->IsLootOpen() && !CursorShown(Player), TEXT("Loot window closes when the corpse is empty"));
+				Check(!HUDOf(Player)->GetHUDWidget()->IsLootOpen(), TEXT("Loot window closes when the corpse is empty"));
 				Check(!Wolf->IsLootable(), TEXT("Empty corpse is no longer lootable"));
 
 				// equip boots: armor
@@ -711,6 +722,9 @@ namespace MMOSelfTest
 			}
 			Check(Inventory->GetFreeSlotCount() == 0, TEXT("Backpack filled for the full-inventory test"));
 
+			Player->DoInteract();
+			Check(HUDOf(Player)->GetHUDWidget()->GetOpenLoot() == Loot, TEXT("F (interact) opens the nearest corpse's loot window"));
+
 			const int32 BootsOnCorpse = Loot->GetItems().FilterByPredicate([Boots](const FMMOItemStack& S) { return S.Item == Boots; }).Num();
 			const EMMOLootResult Result = Player->LootAll(Loot);
 			Check(Result == EMMOLootResult::InventoryFull || Result == EMMOLootResult::Partial, TEXT("Loot All with a full backpack reports Inventory Full"));
@@ -721,8 +735,13 @@ namespace MMOSelfTest
 			Inventory->RemoveItem(WolfFang, Inventory->CountItem(WolfFang) - FangsBefore);
 			Check(Player->LootAll(Loot) == EMMOLootResult::Success && !Loot->HasLoot(), TEXT("With room again the remaining loot can be taken"));
 
+			// Esc closes an open window first, then clears the target on the next press
+			HUDOf(Player)->OpenLoot(Loot->HasLoot() ? Loot : nullptr);
+			const bool bWindowWasOpen = HUDOf(Player)->IsAnyWindowOpen();
 			Player->DoClearTarget();
-			Check(Combat->GetCurrentTarget() == nullptr, TEXT("Clearing the target (Esc) deselects"));
+			Check(!HUDOf(Player)->IsAnyWindowOpen() && (!bWindowWasOpen || Combat->GetCurrentTarget() != nullptr), TEXT("Esc closes open windows before touching the target"));
+			Player->DoClearTarget();
+			Check(Combat->GetCurrentTarget() == nullptr, TEXT("Esc with no windows open clears the target"));
 			State->ItemsBeforeDeath = CountOwned(Player);
 			NextStep();
 			break;

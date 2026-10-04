@@ -54,7 +54,7 @@ protected:
 	UPROPERTY(Transient)
 	TObjectPtr<USoundBase> LoadedWindowCloseSound;
 
-	/** Shows the mouse cursor while any window is open, and gives the camera back when they all close */
+	/** Keeps the mouse cursor visible and free (MMO-style controls) */
 	void UpdateInputMode();
 
 	void PlayUISound(USoundBase* Sound) const;

@@ -92,7 +92,7 @@ void UMMOHUDWidget::BuildDefaultLayout()
 	TargetFrame = WidgetTree->ConstructWidget<UMMOUnitFrameWidget>(FrameClass, TEXT("TargetFrame"));
 	Place(Root, TargetFrame, FAnchors(0.0f, 0.0f), FVector2D::ZeroVector, FVector2D(330.0f, 24.0f));
 
-	UTextBlock* HelpText = MakeText(WidgetTree, TEXT("LMB / Tab: target    1: auto attack    F / RMB: loot    B: backpack    C: character    Esc: close / clear    Wheel: zoom"), 11, Colors::TextDim);
+	UTextBlock* HelpText = MakeText(WidgetTree, TEXT("Left-click: select    Right-click: attack / loot    Hold a mouse button + drag: camera    1: auto attack    F: loot    Tab: next target    B: backpack    C: character    Esc: close / clear"), 11, Colors::TextDim);
 	Place(Root, HelpText, FAnchors(0.0f, 0.0f), FVector2D::ZeroVector, FVector2D(26.0f, 122.0f));
 
 	// hotbar, bottom-center
@@ -100,12 +100,6 @@ void UMMOHUDWidget::BuildDefaultLayout()
 	AttackSlot = WidgetTree->ConstructWidget<UMMOHotbarSlotWidget>(SlotClass, TEXT("AttackSlot"));
 	Place(Root, AttackSlot, FAnchors(0.5f, 1.0f), FVector2D(0.5f, 1.0f), FVector2D(0.0f, -28.0f));
 
-	// crosshair dot
-	UImage* Crosshair = WidgetTree->ConstructWidget<UImage>(UImage::StaticClass(), TEXT("Crosshair"));
-	Crosshair->SetBrush(RoundedBrush(FLinearColor(1.0f, 1.0f, 1.0f, 0.75f), 3.0f, FLinearColor(0.0f, 0.0f, 0.0f, 0.6f), 1.0f));
-	UCanvasPanelSlot* CrosshairSlot = Place(Root, Crosshair, FAnchors(0.5f, 0.5f), FVector2D(0.5f, 0.5f), FVector2D::ZeroVector);
-	CrosshairSlot->SetAutoSize(false);
-	CrosshairSlot->SetSize(FVector2D(6.0f, 6.0f));
 
 	// error line, upper-center
 	ErrorText = MakeText(WidgetTree, TEXT(""), 18, Colors::Error, true, ETextJustify::Center);
