@@ -246,7 +246,6 @@ def create_or_load(name, folder, cls):
 
 def setup_items():
     icons = icon_shapes()
-    cube = unreal.load_asset("/Engine/BasicShapes/Cube")
     assets = {}
     for spec in ITEMS:
         item = create_or_load("DA_Item_" + spec["id"], "/Game/MMO/Items", unreal.MMOItemDefinition)
@@ -268,11 +267,9 @@ def setup_items():
         item.set_editor_property("stats", stats)
         item.set_editor_property("icon", import_icon(spec["id"], icons[spec["id"]]))
 
-        if "mesh_color" in spec:
-            # placeholder blade: a thin box along the weapon bone
-            item.set_editor_property("equipped_mesh", cube)
-            item.set_editor_property("equipped_mesh_transform", unreal.Transform(unreal.Vector(0.0, 0.0, 0.0), unreal.Rotator(0.0, 0.0, 0.0), unreal.Vector(0.03, 0.06, 0.85)))
-            item.set_editor_property("equipped_mesh_color", spec["mesh_color"])
+        # no weapon art yet: leave the equipped mesh empty (a box placeholder looked like a stray rectangle).
+        # Assign a real sword mesh here (or in the asset) and it will attach to the weapon_r bone automatically.
+        item.set_editor_property("equipped_mesh", None)
 
         unreal.EditorAssetLibrary.save_loaded_asset(item, False)
         assets[spec["id"]] = item
