@@ -10,6 +10,9 @@
 #include "UI/MMOActionSlotWidget.h"
 #include "UI/MMOAbilityWidgets.h"
 #include "UI/MMOCraftingWindowWidget.h"
+#include "UI/MMOMenuWidgets.h"
+#include "Settings/MMOSettingsSubsystem.h"
+#include "Engine/GameInstance.h"
 #include "World/MMOCraftingStation.h"
 #include "Creatures/MMOCreature.h"
 #include "Creatures/MMORustQueen.h"
@@ -112,7 +115,7 @@ void UMMOHUDWidget::BuildDefaultLayout()
 	TargetFrame = WidgetTree->ConstructWidget<UMMOUnitFrameWidget>(FrameClass, TEXT("TargetFrame"));
 	Place(Root, TargetFrame, FAnchors(0.0f, 0.0f), FVector2D::ZeroVector, FVector2D(330.0f, 24.0f));
 
-	UTextBlock* HelpText = MakeText(WidgetTree, TEXT("Left-click: select    Right-click: attack / loot    Hold a mouse button + drag: camera    1: auto attack    F: talk / loot    Tab: next target    B: backpack    C: character    K: abilities    L: quest log    2-9: hotbar    Esc: close / clear"), 11, Colors::TextDim);
+	UTextBlock* HelpText = KeyHintsText = MakeText(WidgetTree, TEXT("Left-click: select    Right-click: attack / loot    Hold a mouse button + drag: camera    1: auto attack    F: talk / loot    Tab: next target    B: backpack    C: character    K: abilities    L: quest log    2-9: hotbar    Esc: close / clear"), 11, Colors::TextDim);
 	Place(Root, HelpText, FAnchors(0.0f, 0.0f), FVector2D::ZeroVector, FVector2D(26.0f, 122.0f));
 
 	// hotbar, bottom-center
@@ -253,6 +256,10 @@ void UMMOHUDWidget::BuildDefaultLayout()
 	AbilitiesWindow = WidgetTree->ConstructWidget<UMMOAbilitiesWindowWidget>(UMMOAbilitiesWindowWidget::StaticClass(), TEXT("AbilitiesWindow"));
 	Place(Root, AbilitiesWindow, FAnchors(0.0f, 0.5f), FVector2D(0.0f, 0.5f), FVector2D(340.0f, 0.0f));
 
+	Guide = WidgetTree->ConstructWidget<UMMOGuideWidget>(UMMOGuideWidget::StaticClass(), TEXT("Guide"));
+	Place(Root, Guide, FAnchors(0.0f, 1.0f), FVector2D(0.0f, 1.0f), FVector2D(24.0f, -36.0f));
+	Guide->SetVisibility(ESlateVisibility::Collapsed);
+
 	CraftingWindow = WidgetTree->ConstructWidget<UMMOCraftingWindowWidget>(UMMOCraftingWindowWidget::StaticClass(), TEXT("CraftingWindow"));
 	Place(Root, CraftingWindow, FAnchors(0.0f, 0.5f), FVector2D(0.0f, 0.5f), FVector2D(24.0f, 20.0f));
 
@@ -265,6 +272,20 @@ void UMMOHUDWidget::BuildDefaultLayout()
 	for (UWidget* Window : { static_cast<UWidget*>(CharacterWindow), static_cast<UWidget*>(InventoryWindow), static_cast<UWidget*>(LootWindow), static_cast<UWidget*>(DialogueWindow), static_cast<UWidget*>(QuestLogWindow), static_cast<UWidget*>(VendorWindow), static_cast<UWidget*>(AbilitiesWindow), static_cast<UWidget*>(CraftingWindow) })
 	{
 		Window->SetVisibility(ESlateVisibility::Collapsed);
+	}
+
+	// menus sit above everything else
+	GameMenu = WidgetTree->ConstructWidget<UMMOGameMenuWidget>(UMMOGameMenuWidget::StaticClass(), TEXT("GameMenu"));
+	Place(Root, GameMenu, FAnchors(0.5f, 0.5f), FVector2D(0.5f, 0.5f), FVector2D(0.0f, -20.0f));
+	TitleScreen = WidgetTree->ConstructWidget<UMMOTitleScreenWidget>(UMMOTitleScreenWidget::StaticClass(), TEXT("TitleScreen"));
+	Fill(Root, TitleScreen);
+	ControlsWindow = WidgetTree->ConstructWidget<UMMOControlsWindowWidget>(UMMOControlsWindowWidget::StaticClass(), TEXT("ControlsWindow"));
+	Place(Root, ControlsWindow, FAnchors(0.5f, 0.5f), FVector2D(0.5f, 0.5f), FVector2D(0.0f, 0.0f));
+	SettingsWindow = WidgetTree->ConstructWidget<UMMOSettingsWindowWidget>(UMMOSettingsWindowWidget::StaticClass(), TEXT("SettingsWindow"));
+	Place(Root, SettingsWindow, FAnchors(0.5f, 0.5f), FVector2D(0.5f, 0.5f), FVector2D(0.0f, 0.0f));
+	for (UWidget* Menu : { static_cast<UWidget*>(GameMenu), static_cast<UWidget*>(TitleScreen), static_cast<UWidget*>(ControlsWindow), static_cast<UWidget*>(SettingsWindow) })
+	{
+		Menu->SetVisibility(ESlateVisibility::Collapsed);
 	}
 }
 
@@ -319,6 +340,26 @@ void UMMOHUDWidget::NativeConstruct()
 	{
 		CraftingWindow->OnCloseRequested.BindLambda([this]() { CloseWindowFromWidget(CraftingWindow); });
 	}
+	if (SettingsWindow)
+	{
+		SettingsWindow->OnCloseRequested.BindLambda([this]() { CloseWindowFromWidget(SettingsWindow); });
+	}
+	if (ControlsWindow)
+	{
+		ControlsWindow->OnCloseRequested.BindLambda([this]() { CloseWindowFromWidget(ControlsWindow); });
+	}
+	if (Guide)
+	{
+		Guide->OnHideTips.BindLambda([this]()
+		{
+			if (UMMOSettingsSubsystem* Options = GetGameInstance() ? GetGameInstance()->GetSubsystem<UMMOSettingsSubsystem>() : nullptr)
+			{
+				Options->Get()->bShowTutorial = false;
+				Options->ApplyAndSave();
+			}
+			UpdateGuide(BoundCharacter.Get());
+		});
+	}
 }
 
 void UMMOHUDWidget::NativeDestruct()
@@ -339,6 +380,12 @@ void UMMOHUDWidget::NativeTick(const FGeometry& MyGeometry, float InDeltaTime)
 
 	UpdateFrames(Character);
 	UpdateCastBar(Character);
+	GuideTimer -= InDeltaTime;
+	if (GuideTimer <= 0.0f)
+	{
+		GuideTimer = 0.5f;
+		UpdateGuide(Character);
+	}
 	UpdateBossFrame(Character, InDeltaTime);
 	UpdateFloatingTexts(InDeltaTime);
 	UpdateBanners(Character, InDeltaTime);
@@ -499,6 +546,125 @@ bool UMMOHUDWidget::IsCraftingOpen() const
 AMMOCraftingStation* UMMOHUDWidget::GetOpenStation() const
 {
 	return IsCraftingOpen() ? CraftingWindow->GetStation() : nullptr;
+}
+
+void UMMOHUDWidget::ShowTitle(bool bHasSave, int32 SavedLevel)
+{
+	if (TitleScreen)
+	{
+		TitleScreen->Setup(bHasSave, SavedLevel);
+		TitleScreen->SetVisibility(ESlateVisibility::Visible);
+	}
+}
+
+void UMMOHUDWidget::HideTitle()
+{
+	if (TitleScreen)
+	{
+		TitleScreen->SetVisibility(ESlateVisibility::Collapsed);
+	}
+}
+
+bool UMMOHUDWidget::IsTitleOpen() const
+{
+	return TitleScreen && TitleScreen->GetVisibility() == ESlateVisibility::Visible;
+}
+
+void UMMOHUDWidget::SetGameMenuOpen(bool bOpen)
+{
+	if (GameMenu)
+	{
+		GameMenu->SetVisibility(bOpen ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
+	}
+}
+
+bool UMMOHUDWidget::IsGameMenuOpen() const
+{
+	return GameMenu && GameMenu->GetVisibility() == ESlateVisibility::Visible;
+}
+
+void UMMOHUDWidget::SetSettingsOpen(bool bOpen)
+{
+	if (SettingsWindow)
+	{
+		if (bOpen)
+		{
+			SettingsWindow->Init(GetGameInstance() ? GetGameInstance()->GetSubsystem<UMMOSettingsSubsystem>() : nullptr);
+		}
+		SettingsWindow->SetVisibility(bOpen ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
+	}
+}
+
+bool UMMOHUDWidget::IsSettingsOpen() const
+{
+	return SettingsWindow && SettingsWindow->GetVisibility() == ESlateVisibility::Visible;
+}
+
+void UMMOHUDWidget::SetControlsOpen(bool bOpen)
+{
+	if (ControlsWindow)
+	{
+		ControlsWindow->SetVisibility(bOpen ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
+	}
+}
+
+bool UMMOHUDWidget::IsControlsOpen() const
+{
+	return ControlsWindow && ControlsWindow->GetVisibility() == ESlateVisibility::Visible;
+}
+
+void UMMOHUDWidget::UpdateGuide(AMMOCharacter* Character)
+{
+	const UMMOSettingsSubsystem* Options = GetGameInstance() ? GetGameInstance()->GetSubsystem<UMMOSettingsSubsystem>() : nullptr;
+	if (KeyHintsText && Options)
+	{
+		KeyHintsText->SetVisibility(Options->Get()->bShowKeyHints ? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed);
+	}
+
+	GuideTipId = NAME_None;
+	FText Tip;
+	if (Character && Options && Options->Get()->bShowTutorial)
+	{
+		const UMMOQuestLogComponent* Log = Character->GetQuestLog();
+		const int32 Completed = Log->GetCompletedQuestIds().Num();
+		const int32 Level = Character->GetProgression()->GetLevel();
+		if (Log->GetActiveQuests().Num() == 0 && Completed == 0)
+		{
+			GuideTipId = TEXT("Talk");
+			Tip = NSLOCTEXT("MMOGuide", "Talk", "Welcome to Thornwick! Townsfolk with a gold ! have work for you. Right-click Warden Hollis by the east gate (or walk up and press F) to talk.");
+		}
+		else if (!Character->HasTutorial(TEXT("Kill")))
+		{
+			GuideTipId = TEXT("Hunt");
+			Tip = NSLOCTEXT("MMOGuide", "Hunt", "Grey Wolves roam the meadow past the gate. Right-click one to attack: your sword keeps swinging on its own. Press 1 to toggle auto attack.");
+		}
+		else if (!Character->HasTutorial(TEXT("Loot")))
+		{
+			GuideTipId = TEXT("Loot");
+			Tip = NSLOCTEXT("MMOGuide", "Loot", "A sparkle over a corpse means loot. Right-click the corpse (or press F nearby) and take what it dropped.");
+		}
+		else if (!Character->HasTutorial(TEXT("Backpack")))
+		{
+			GuideTipId = TEXT("Backpack");
+			Tip = NSLOCTEXT("MMOGuide", "Backpack", "Press B to open your backpack. Right-click gear to wear it, potions and food to use them; hover anything for details.");
+		}
+		else if (Completed == 0)
+		{
+			GuideTipId = TEXT("TurnIn");
+			Tip = NSLOCTEXT("MMOGuide", "TurnIn", "Your quest tracker (right) shows progress. When it says Ready to turn in, return to the quest giver: look for the gold ?.");
+		}
+		else if (Level >= 2 && !Character->HasTutorial(TEXT("Abilities")))
+		{
+			GuideTipId = TEXT("Abilities");
+			Tip = NSLOCTEXT("MMOGuide", "Abilities", "You learn abilities as you level. They go on your hotbar (keys 2-9). Press K to see them all and what they do.");
+		}
+	}
+
+	if (Guide)
+	{
+		Guide->SetTip(Tip);
+		Guide->SetVisibility(GuideTipId.IsNone() || IsTitleOpen() ? ESlateVisibility::Collapsed : ESlateVisibility::Visible);
+	}
 }
 
 void UMMOHUDWidget::SetAbilitiesOpen(bool bOpen)
@@ -737,6 +903,10 @@ void UMMOHUDWidget::CloseWindowFromWidget(UWidget* Window)
 	else if (Window == CraftingWindow)
 	{
 		CloseCrafting();
+	}
+	else if (Window == SettingsWindow || Window == ControlsWindow)
+	{
+		Window->SetVisibility(ESlateVisibility::Collapsed);
 	}
 	else if (Window)
 	{

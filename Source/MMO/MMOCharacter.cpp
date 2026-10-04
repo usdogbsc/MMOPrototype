@@ -31,6 +31,7 @@
 #include "Combat/MMOAbilityComponent.h"
 #include "Combat/MMOAbilityDefinition.h"
 #include "Professions/MMOProfessionComponent.h"
+#include "Settings/MMOSettingsSubsystem.h"
 #include "UI/MMOHUDWidget.h"
 #include "NPC/MMONPC.h"
 #include "Save/MMOSaveSubsystem.h"
@@ -334,6 +335,13 @@ void AMMOCharacter::DoMove(float Right, float Forward)
 
 void AMMOCharacter::DoLook(float Yaw, float Pitch)
 {
+	// player options: camera speed and inverted Y
+	if (const UMMOSettingsSubsystem* Options = GetGameInstance() ? GetGameInstance()->GetSubsystem<UMMOSettingsSubsystem>() : nullptr)
+	{
+		Yaw *= Options->Get()->MouseSensitivity;
+		Pitch *= Options->Get()->MouseSensitivity * (Options->Get()->bInvertY ? -1.0f : 1.0f);
+	}
+
 	if (GetController() != nullptr)
 	{
 		// add yaw and pitch input to controller
@@ -463,14 +471,21 @@ void AMMOCharacter::DoBasicAttack()
 
 void AMMOCharacter::DoClearTarget()
 {
-	// Escape closes open windows first, like most MMOs; otherwise it clears the target
+	// Escape closes open windows first, like most MMOs; then it clears the target; then it opens the game menu
 	AMMOHUD* HUD = Cast<AMMOHUD>(Cast<APlayerController>(GetController()) ? Cast<APlayerController>(GetController())->GetHUD() : nullptr);
 	if (HUD && HUD->CloseAllWindows())
 	{
 		return;
 	}
-
-	Combat->ClearTarget();
+	if (Combat->GetCurrentTarget())
+	{
+		Combat->ClearTarget();
+		return;
+	}
+	if (HUD)
+	{
+		HUD->ToggleGameMenu();
+	}
 }
 
 void AMMOCharacter::DoZoom(float Amount)
@@ -593,6 +608,7 @@ bool AMMOCharacter::MoveInventorySlot(int32 FromIndex, int32 ToIndex)
 
 EMMOLootResult AMMOCharacter::LootItem(UMMOLootContainerComponent* Container, const FGuid& InstanceId)
 {
+	MarkTutorial(TEXT("Loot"));
 	if (!CanReachLoot(Container))
 	{
 		return EMMOLootResult::NotFound;
@@ -608,11 +624,13 @@ EMMOLootResult AMMOCharacter::LootItem(UMMOLootContainerComponent* Container, co
 
 EMMOLootResult AMMOCharacter::LootCurrency(UMMOLootContainerComponent* Container)
 {
+	MarkTutorial(TEXT("Loot"));
 	return CanReachLoot(Container) ? Container->TakeCurrency(Inventory) : EMMOLootResult::NotFound;
 }
 
 EMMOLootResult AMMOCharacter::LootAll(UMMOLootContainerComponent* Container)
 {
+	MarkTutorial(TEXT("Loot"));
 	if (!CanReachLoot(Container))
 	{
 		return EMMOLootResult::NotFound;

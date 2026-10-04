@@ -6,6 +6,12 @@
 #include "Items/MMOLootContainerComponent.h"
 #include "NPC/MMONPC.h"
 #include "World/MMOCraftingStation.h"
+#include "UI/MMOMenuWidgets.h"
+#include "Settings/MMOSettingsSubsystem.h"
+#include "Save/MMOSaveSubsystem.h"
+#include "Save/MMOSaveGame.h"
+#include "Engine/GameInstance.h"
+#include "Kismet/KismetSystemLibrary.h"
 #include "GameFramework/PlayerController.h"
 #include "Kismet/GameplayStatics.h"
 #include "Sound/SoundBase.h"
@@ -44,6 +50,130 @@ void AMMOHUD::BeginPlay()
 	LoadedWindowCloseSound = WindowCloseSound.LoadSynchronous();
 
 	UpdateInputMode();
+
+	if (HUDWidget)
+	{
+		if (UMMOGameMenuWidget* Menu = HUDWidget->GetGameMenu())
+		{
+			Menu->OnResume.BindUObject(this, &AMMOHUD::ToggleGameMenu);
+			Menu->OnSettings.BindUObject(this, &AMMOHUD::OpenSettings);
+			Menu->OnControls.BindUObject(this, &AMMOHUD::OpenControls);
+			Menu->OnQuitToTitle.BindUObject(this, &AMMOHUD::QuitToTitle);
+			Menu->OnQuitGame.BindUObject(this, &AMMOHUD::QuitGame);
+		}
+		if (UMMOTitleScreenWidget* Title = HUDWidget->GetTitleScreen())
+		{
+			Title->OnContinue.BindUObject(this, &AMMOHUD::ContinueFromTitle);
+			Title->OnNewAdventure.BindUObject(this, &AMMOHUD::StartNewAdventure);
+			Title->OnSettings.BindUObject(this, &AMMOHUD::OpenSettings);
+			Title->OnQuit.BindUObject(this, &AMMOHUD::QuitGame);
+		}
+	}
+
+	// the title screen greets the player once per session
+	UMMOSettingsSubsystem* Options = GetGameInstance() ? GetGameInstance()->GetSubsystem<UMMOSettingsSubsystem>() : nullptr;
+	if (HUDWidget && Options && Options->ShouldShowTitle())
+	{
+		Options->MarkTitleShown();
+		const UMMOSaveSubsystem* Saves = GetGameInstance()->GetSubsystem<UMMOSaveSubsystem>();
+		int32 Level = 1;
+		const bool bHasSave = Saves && Saves->IsPersistenceEnabled() && Saves->HasSave();
+		if (bHasSave)
+		{
+			if (const UMMOSaveGame* Save = Cast<UMMOSaveGame>(UGameplayStatics::LoadGameFromSlot(UMMOSaveSubsystem::DefaultSlot, 0)))
+			{
+				Level = Save->Level;
+			}
+		}
+		HUDWidget->ShowTitle(bHasSave, Level);
+		FInputModeUIOnly Mode;
+		Mode.SetWidgetToFocus(HUDWidget->GetTitleScreen()->TakeWidget());
+		PlayerOwner->SetInputMode(Mode);
+		PlayerOwner->SetShowMouseCursor(true);
+	}
+}
+
+void AMMOHUD::ContinueFromTitle()
+{
+	if (HUDWidget)
+	{
+		HUDWidget->HideTitle();
+		HUDWidget->SetSettingsOpen(false);
+	}
+	if (PlayerOwner)
+	{
+		// back to classic MMO mouse controls
+		PlayerOwner->SetShowMouseCursor(false);
+		UpdateInputMode();
+	}
+	PlayUISound(LoadedWindowCloseSound);
+}
+
+void AMMOHUD::StartNewAdventure()
+{
+	UGameInstance* Instance = GetGameInstance();
+	UMMOSaveSubsystem* Saves = Instance ? Instance->GetSubsystem<UMMOSaveSubsystem>() : nullptr;
+	if (!Saves)
+	{
+		return;
+	}
+	// erase the old character and restart the map with a fresh one (straight into the game)
+	Saves->SuppressSavesUntilNextLoad();
+	Saves->DeleteSave();
+	UGameplayStatics::OpenLevel(this, FName(*UWorld::RemovePIEPrefix(GetWorld()->GetOutermost()->GetName())));
+}
+
+void AMMOHUD::QuitToTitle()
+{
+	if (AMMOCharacter* Character = Cast<AMMOCharacter>(GetOwningPawn()))
+	{
+		Character->SaveNow();
+	}
+	if (UMMOSettingsSubsystem* Options = GetGameInstance() ? GetGameInstance()->GetSubsystem<UMMOSettingsSubsystem>() : nullptr)
+	{
+		Options->RequestTitle();
+	}
+	UGameplayStatics::OpenLevel(this, FName(*UWorld::RemovePIEPrefix(GetWorld()->GetOutermost()->GetName())));
+}
+
+void AMMOHUD::QuitGame()
+{
+	if (AMMOCharacter* Character = Cast<AMMOCharacter>(GetOwningPawn()))
+	{
+		Character->SaveNow();
+	}
+	UKismetSystemLibrary::QuitGame(this, PlayerOwner, EQuitPreference::Quit, false);
+}
+
+void AMMOHUD::ToggleGameMenu()
+{
+	if (HUDWidget && !HUDWidget->IsTitleOpen())
+	{
+		const bool bOpen = !HUDWidget->IsGameMenuOpen();
+		HUDWidget->SetGameMenuOpen(bOpen);
+		PlayUISound(bOpen ? LoadedWindowOpenSound : LoadedWindowCloseSound);
+		UpdateInputMode();
+	}
+}
+
+void AMMOHUD::OpenSettings()
+{
+	if (HUDWidget)
+	{
+		HUDWidget->SetGameMenuOpen(false);
+		HUDWidget->SetSettingsOpen(true);
+		PlayUISound(LoadedWindowOpenSound);
+	}
+}
+
+void AMMOHUD::OpenControls()
+{
+	if (HUDWidget)
+	{
+		HUDWidget->SetGameMenuOpen(false);
+		HUDWidget->SetControlsOpen(true);
+		PlayUISound(LoadedWindowOpenSound);
+	}
 }
 
 void AMMOHUD::Tick(float DeltaSeconds)
@@ -115,6 +245,10 @@ void AMMOHUD::ToggleAbilities()
 	if (HUDWidget)
 	{
 		const bool bOpen = !HUDWidget->IsAbilitiesOpen();
+		if (AMMOCharacter* Character = Cast<AMMOCharacter>(GetOwningPawn()); Character && bOpen)
+		{
+			Character->MarkTutorial(TEXT("Abilities"));
+		}
 		HUDWidget->SetAbilitiesOpen(bOpen);
 		PlayUISound(bOpen ? LoadedWindowOpenSound : LoadedWindowCloseSound);
 		UpdateInputMode();
@@ -204,6 +338,10 @@ void AMMOHUD::ToggleInventory()
 	if (HUDWidget)
 	{
 		const bool bOpen = !HUDWidget->IsInventoryOpen();
+		if (AMMOCharacter* Character = Cast<AMMOCharacter>(GetOwningPawn()); Character && bOpen)
+		{
+			Character->MarkTutorial(TEXT("Backpack"));
+		}
 		HUDWidget->SetInventoryOpen(bOpen);
 		PlayUISound(bOpen ? LoadedWindowOpenSound : LoadedWindowCloseSound);
 		UpdateInputMode();
@@ -259,6 +397,9 @@ bool AMMOHUD::CloseAllWindows()
 	HUDWidget->SetQuestLogOpen(false);
 	HUDWidget->SetAbilitiesOpen(false);
 	HUDWidget->CloseCrafting();
+	HUDWidget->SetGameMenuOpen(false);
+	HUDWidget->SetSettingsOpen(false);
+	HUDWidget->SetControlsOpen(false);
 	PlayUISound(LoadedWindowCloseSound);
 	UpdateInputMode();
 	return true;
@@ -266,7 +407,8 @@ bool AMMOHUD::CloseAllWindows()
 
 bool AMMOHUD::IsAnyWindowOpen() const
 {
-	return HUDWidget && (HUDWidget->IsInventoryOpen() || HUDWidget->IsCharacterOpen() || HUDWidget->IsLootOpen() || HUDWidget->IsDialogueOpen() || HUDWidget->IsQuestLogOpen() || HUDWidget->IsVendorOpen() || HUDWidget->IsAbilitiesOpen() || HUDWidget->IsCraftingOpen());
+	return HUDWidget && (HUDWidget->IsInventoryOpen() || HUDWidget->IsCharacterOpen() || HUDWidget->IsLootOpen() || HUDWidget->IsDialogueOpen() || HUDWidget->IsQuestLogOpen() || HUDWidget->IsVendorOpen() || HUDWidget->IsAbilitiesOpen() || HUDWidget->IsCraftingOpen()
+		|| HUDWidget->IsGameMenuOpen() || HUDWidget->IsSettingsOpen() || HUDWidget->IsControlsOpen());
 }
 
 void AMMOHUD::HandleWindowClosed()

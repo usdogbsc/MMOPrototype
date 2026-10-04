@@ -1452,7 +1452,8 @@ def build_navigation_and_start():
     nav = ACTORS.spawn_actor_from_class(unreal.NavMeshBoundsVolume, unreal.Vector(9500, 0, 1200))
     nav.set_actor_label("NavMeshBounds")
     nav.set_actor_scale3d(unreal.Vector(146.0, 92.0, 38.0))
-    start = ACTORS.spawn_actor_from_class(unreal.PlayerStart, unreal.Vector(-1500, -250, ground(-1500, -250) + 100), unreal.Rotator(0, 0, 5))
+    # in the open lane west of the square, looking at the well and the market
+    start = ACTORS.spawn_actor_from_class(unreal.PlayerStart, unreal.Vector(-600, 480, ground(-600, 480) + 100), unreal.Rotator(0, 0, -28))
     start.set_actor_label("PlayerStart")
     log("NavMesh bounds and PlayerStart")
 

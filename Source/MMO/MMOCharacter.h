@@ -356,6 +356,9 @@ protected:
 	FTimerHandle RespawnTimer;
 	FTimerHandle SaveTimer;
 
+	/** First-session guide progress ("Kill", "Loot", "Backpack", "Abilities") */
+	TSet<FName> TutorialFlags;
+
 	/** World time an ability last went off (counts as combat) */
 	double LastAbilityTime = -1000.0;
 
@@ -569,6 +572,12 @@ public:
 
 	/** Floating text at a world location, e.g. "Stunned" */
 	void ShowWorldText(const FVector& Location, const FString& Text, const FLinearColor& Color) const;
+
+	/** Guide progress (saved with the character) */
+	void MarkTutorial(FName Flag) { TutorialFlags.Add(Flag); }
+	bool HasTutorial(FName Flag) const { return TutorialFlags.Contains(Flag); }
+	const TSet<FName>& GetTutorialFlags() const { return TutorialFlags; }
+	void RestoreTutorialFlags(const TSet<FName>& Flags) { TutorialFlags = Flags; }
 
 	/** True while an ability cast is in progress */
 	bool IsCasting() const;

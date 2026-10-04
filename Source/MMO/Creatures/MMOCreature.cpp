@@ -9,6 +9,7 @@
 #include "Items/MMOLootContainerComponent.h"
 #include "Items/MMOLootTable.h"
 #include "Quests/MMOQuestLogComponent.h"
+#include "MMOCharacter.h"
 #include "UI/MMONameplateWidget.h"
 #include "Animation/AnimMontage.h"
 #include "Components/CapsuleComponent.h"
@@ -465,6 +466,10 @@ void AMMOCreature::HandleDeath(AActor* Killer)
 		if (UMMOQuestLogComponent* QuestLog = Killer->FindComponentByClass<UMMOQuestLogComponent>())
 		{
 			QuestLog->NotifyKill(QuestTag);
+		}
+		if (AMMOCharacter* PlayerKiller = Cast<AMMOCharacter>(Killer))
+		{
+			PlayerKiller->MarkTutorial(TEXT("Kill"));
 		}
 	}
 

@@ -99,6 +99,7 @@ UMMOSaveGame* UMMOSaveSubsystem::Capture(const AMMOCharacter* Character, UObject
 	Save->Discovered = Character->GetExploration()->GetDiscovered().Array();
 	Save->ActionBar = Character->GetActionBar()->GetSlots();
 	Save->ProfessionSkills = Character->GetProfessions()->GetSkills();
+	Save->TutorialFlags = Character->GetTutorialFlags().Array();
 	return Save;
 }
 
@@ -160,6 +161,10 @@ bool UMMOSaveSubsystem::Apply(const UMMOSaveGame* Save, AMMOCharacter* Character
 	if (Save->Version >= 3)
 	{
 		Character->GetProfessions()->RestoreSkills(Save->ProfessionSkills);
+	}
+	if (Save->Version >= 4)
+	{
+		Character->RestoreTutorialFlags(TSet<FName>(Save->TutorialFlags));
 	}
 
 	// version 1 saves had no hotbar: keep the current one

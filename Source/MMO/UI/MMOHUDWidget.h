@@ -29,6 +29,11 @@ class UMMOVendorWindowWidget;
 class UMMOActionSlotWidget;
 class UHorizontalBox;
 class UMMOAbilitiesWindowWidget;
+class UMMOTitleScreenWidget;
+class UMMOGameMenuWidget;
+class UMMOSettingsWindowWidget;
+class UMMOControlsWindowWidget;
+class UMMOGuideWidget;
 class UMMOCraftingWindowWidget;
 class AMMOCraftingStation;
 class UMMOAbilityDefinition;
@@ -83,6 +88,23 @@ public:
 	bool IsCraftingOpen() const;
 	AMMOCraftingStation* GetOpenStation() const;
 	UMMOCraftingWindowWidget* GetCraftingWindow() const { return CraftingWindow; }
+
+	/** Title screen, game menu, settings and controls (managed by AMMOHUD) */
+	void ShowTitle(bool bHasSave, int32 SavedLevel);
+	void HideTitle();
+	bool IsTitleOpen() const;
+	void SetGameMenuOpen(bool bOpen);
+	bool IsGameMenuOpen() const;
+	void SetSettingsOpen(bool bOpen);
+	bool IsSettingsOpen() const;
+	void SetControlsOpen(bool bOpen);
+	bool IsControlsOpen() const;
+	UMMOTitleScreenWidget* GetTitleScreen() const { return TitleScreen; }
+	UMMOGameMenuWidget* GetGameMenu() const { return GameMenu; }
+
+	/** Current guide tip id ("Talk", "Hunt", ... or empty when done / hidden) */
+	FName GetGuideTipId() const { return GuideTipId; }
+	void UpdateGuide(AMMOCharacter* Character);
 
 	void SetAbilitiesOpen(bool bOpen);
 	bool IsAbilitiesOpen() const;
@@ -200,6 +222,27 @@ protected:
 
 	UPROPERTY(BlueprintReadOnly, Category="HUD", meta=(BindWidgetOptional))
 	TObjectPtr<UTextBlock> CastBarText;
+
+	UPROPERTY(BlueprintReadOnly, Category="HUD", meta=(BindWidgetOptional))
+	TObjectPtr<UMMOTitleScreenWidget> TitleScreen;
+
+	UPROPERTY(BlueprintReadOnly, Category="HUD", meta=(BindWidgetOptional))
+	TObjectPtr<UMMOGameMenuWidget> GameMenu;
+
+	UPROPERTY(BlueprintReadOnly, Category="HUD", meta=(BindWidgetOptional))
+	TObjectPtr<UMMOSettingsWindowWidget> SettingsWindow;
+
+	UPROPERTY(BlueprintReadOnly, Category="HUD", meta=(BindWidgetOptional))
+	TObjectPtr<UMMOControlsWindowWidget> ControlsWindow;
+
+	UPROPERTY(BlueprintReadOnly, Category="HUD", meta=(BindWidgetOptional))
+	TObjectPtr<UMMOGuideWidget> Guide;
+
+	UPROPERTY(BlueprintReadOnly, Category="HUD", meta=(BindWidgetOptional))
+	TObjectPtr<UTextBlock> KeyHintsText;
+
+	FName GuideTipId;
+	float GuideTimer = 0.0f;
 
 	/** Big boss health bar, top-center */
 	UPROPERTY(BlueprintReadOnly, Category="HUD", meta=(BindWidgetOptional))

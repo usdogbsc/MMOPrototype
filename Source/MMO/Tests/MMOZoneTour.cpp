@@ -7,6 +7,7 @@
 // The player is invulnerable during the tour.
 
 #include "CoreMinimal.h"
+#include "Misc/App.h"
 
 #if !UE_BUILD_SHIPPING
 
@@ -66,6 +67,9 @@ namespace MMOZoneTour
 		TArray<FString> Only;
 		double StepStart = 0.0;
 		bool bShot = false;
+		/** Frame time sampling between arriving and the screenshot (performance pass) */
+		double FrameTimeSum = 0.0;
+		int32 Frames = 0;
 		bool bQuit = false;
 		FTSTicker::FDelegateHandle Ticker;
 	};
@@ -119,6 +123,12 @@ namespace MMOZoneTour
 			++Tour->Index;
 			return true;
 		}
+		if (Tour->StepStart > 0.0 && Now - Tour->StepStart > 1.0 && !Tour->bShot)
+		{
+			// skip the first second after teleporting (streaming, shader warm-up)
+			Tour->FrameTimeSum += FApp::GetDeltaTime();
+			++Tour->Frames;
+		}
 		if (Tour->StepStart == 0.0)
 		{
 			GoTo(World, View);
@@ -127,6 +137,10 @@ namespace MMOZoneTour
 		}
 		else if (!Tour->bShot && Now - Tour->StepStart > 2.5)
 		{
+			const double AverageMs = Tour->Frames > 0 ? Tour->FrameTimeSum / Tour->Frames * 1000.0 : 0.0;
+			UE_LOG(LogMMO, Display, TEXT("MMO TOUR perf %s: %.1f ms/frame (%.0f fps) over %d frames"), View.Name, AverageMs, AverageMs > 0.0 ? 1000.0 / AverageMs : 0.0, Tour->Frames);
+			Tour->FrameTimeSum = 0.0;
+			Tour->Frames = 0;
 			FScreenshotRequest::RequestScreenshot(FPaths::ProjectSavedDir() / TEXT("Screenshots") / FString::Printf(TEXT("MMOTour_%02d_%s.png"), Tour->Index, View.Name), true, false);
 			UE_LOG(LogMMO, Display, TEXT("MMO TOUR shot %s"), View.Name);
 			Tour->bShot = true;
@@ -189,6 +203,18 @@ static FAutoConsoleCommand GMMOQuitAfterCommand(TEXT("mmo.quitafter"), TEXT("mmo
 		FTSTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateLambda([](float)
 		{
 			FPlatformMisc::RequestExit(false, TEXT("mmo.quitafter"));
+			return false;
+		}), Delay);
+	}));
+
+static FAutoConsoleCommand GMMOScreenshotCommand(TEXT("mmo.screenshot"), TEXT("mmo.screenshot <delay seconds> <name>: saves Saved/Screenshots/<name>.png after a delay."),
+	FConsoleCommandWithArgsDelegate::CreateLambda([](const TArray<FString>& Args)
+	{
+		const float Delay = Args.Num() > 0 ? FCString::Atof(*Args[0]) : 1.0f;
+		const FString Name = Args.Num() > 1 ? Args[1] : TEXT("MMOShot");
+		FTSTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateLambda([Name](float)
+		{
+			FScreenshotRequest::RequestScreenshot(FPaths::ProjectSavedDir() / TEXT("Screenshots") / (Name + TEXT(".png")), true, false);
 			return false;
 		}), Delay);
 	}));

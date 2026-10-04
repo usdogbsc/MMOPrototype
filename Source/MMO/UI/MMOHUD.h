@@ -31,6 +31,15 @@ public:
 	void CloseLoot();
 	void ToggleQuestLog();
 	void ToggleAbilities();
+	void ToggleGameMenu();
+	void OpenSettings();
+	void OpenControls();
+
+	/** Title screen buttons */
+	void ContinueFromTitle();
+	void StartNewAdventure();
+	void QuitToTitle();
+	void QuitGame();
 	void OpenCrafting(AMMOCraftingStation* Station);
 	void CloseCrafting();
 	void OpenDialogue(AMMONPC* NPC);

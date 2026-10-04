@@ -47,6 +47,8 @@
 #include "Professions/MMORecipeDefinition.h"
 #include "World/MMOGatherNode.h"
 #include "World/MMOPortal.h"
+#include "Settings/MMOSettingsSubsystem.h"
+#include "UI/MMOMenuWidgets.h"
 #include "World/MMOTelegraph.h"
 #include "Creatures/MMORustback.h"
 #include "Creatures/MMORustQueen.h"
@@ -384,6 +386,12 @@ namespace MMOSelfTest
 			}
 
 			Check(Progression->GetLevel() == 1, TEXT("Player starts at level 1"));
+			if (const UMMOSettingsSubsystem* Options = World->GetGameInstance()->GetSubsystem<UMMOSettingsSubsystem>())
+			{
+				HUDOf(Player)->GetHUDWidget()->UpdateGuide(Player);
+				Check(!Options->Get()->bShowTutorial || HUDOf(Player)->GetHUDWidget()->GetGuideTipId() == TEXT("Talk"), TEXT("The guide's first tip points new players at the quest giver"));
+				Check(!HUDOf(Player)->GetHUDWidget()->IsTitleOpen(), TEXT("Automated runs skip the title screen"));
+			}
 			Check(FMath::IsNearlyEqual(PlayerHealth->GetCurrentHealth(), 100.0f) && FMath::IsNearlyEqual(PlayerHealth->GetMaxHealth(), 100.0f), TEXT("Player starts at 100/100 health"));
 			Check(Progression->GetCurrentXP() == 0 && Progression->GetXPToNextLevel() == 100, TEXT("Player starts at 0/100 XP"));
 
@@ -1901,7 +1909,68 @@ namespace MMOSelfTest
 			}
 			break;
 
-		case 61: // save, scramble everything, load: the character comes back exactly as it was (Milestone 5)
+		case 61: // Milestone 10: game menu, settings, controls and the guide
+		{
+			UMMOHUDWidget* Widget = HUDOf(Player)->GetHUDWidget();
+			UMMOSettingsSubsystem* Options = World->GetGameInstance()->GetSubsystem<UMMOSettingsSubsystem>();
+			Check(Options && Options->Get() && Options->Get()->MouseSensitivity > 0.0f && Options->Get()->MasterVolume >= 0.0f, TEXT("Player settings are loaded"));
+
+			HUDOf(Player)->CloseAllWindows();
+			Combat->ClearTarget();
+			Player->DoClearTarget();
+			Check(Widget->IsGameMenuOpen(), TEXT("Esc with nothing open and no target opens the game menu"));
+			HUDOf(Player)->OpenSettings();
+			Check(Widget->IsSettingsOpen() && !Widget->IsGameMenuOpen(), TEXT("Settings opens from the game menu"));
+			Player->DoClearTarget();
+			Check(!Widget->IsSettingsOpen(), TEXT("Esc closes the settings"));
+			HUDOf(Player)->OpenControls();
+			Check(Widget->IsControlsOpen(), TEXT("The controls list opens from the game menu"));
+			Player->DoClearTarget();
+
+			if (Options && Options->Get()->bShowTutorial)
+			{
+				Widget->UpdateGuide(Player);
+				const bool bZone = State->bHasZones;
+				Check(!bZone || Widget->GetGuideTipId().IsNone(), FString::Printf(TEXT("After the full playthrough every guide tip is done (current: %s)"), *Widget->GetGuideTipId().ToString()));
+				Check(Player->HasTutorial(TEXT("Kill")) && Player->HasTutorial(TEXT("Loot")) && Player->HasTutorial(TEXT("Backpack")) && Player->HasTutorial(TEXT("Abilities")),
+					TEXT("Killing, looting, the backpack and the abilities window were all noticed by the guide"));
+			}
+			HUDOf(Player)->ToggleGameMenu();
+			State->bFlag = false;
+			NextStep();
+			break;
+		}
+
+		case 62:
+			if (!State->bFlag && Elapsed() > 0.4f)
+			{
+				Shot(TEXT("14_GameMenu"));
+				State->bFlag = true;
+			}
+			else if (State->bFlag && Elapsed() > 0.8f)
+			{
+				HUDOf(Player)->CloseAllWindows();
+				HUDOf(Player)->OpenSettings();
+				State->bFlag = false;
+				NextStep();
+			}
+			break;
+
+		case 63:
+			if (!State->bFlag && Elapsed() > 0.4f)
+			{
+				Shot(TEXT("15_Settings"));
+				State->bFlag = true;
+			}
+			else if (State->bFlag && Elapsed() > 0.8f)
+			{
+				HUDOf(Player)->CloseAllWindows();
+				State->bFlag = false;
+				NextStep();
+			}
+			break;
+
+		case 64: // save, scramble everything, load: the character comes back exactly as it was (Milestone 5)
 		{
 			UMMOSaveSubsystem* Saves = World->GetGameInstance()->GetSubsystem<UMMOSaveSubsystem>();
 			Check(Saves && !Saves->IsPersistenceEnabled(), TEXT("Autosave is off during the self-test (real progress is never overwritten)"));
@@ -1942,6 +2011,7 @@ namespace MMOSelfTest
 			Equipment->ClearEquipment();
 			Player->GetActionBar()->RestoreSlots({});
 			Player->GetProfessions()->RestoreSkills({});
+			Player->RestoreTutorialFlags({});
 			Progression->ResetProgression();
 			QuestLog->RestoreState({}, {});
 			Player->GetExploration()->RestoreDiscovered({});
@@ -1974,6 +2044,7 @@ namespace MMOSelfTest
 			Check(TSet<FName>(After->Discovered).Num() == Before->Discovered.Num() && TSet<FName>(After->Discovered).Includes(TSet<FName>(Before->Discovered)), TEXT("Discovered places restored"));
 			Check(FVector::Dist(Player->GetActorLocation(), Location) < 60.0f, TEXT("Position restored"));
 			Check(After->ProfessionSkills == Before->ProfessionSkills, TEXT("Profession skills restored"));
+			Check(TSet<FName>(After->TutorialFlags).Num() == Before->TutorialFlags.Num() && Before->TutorialFlags.Num() > 0, TEXT("Guide progress restored"));
 			Check(After->ActionBar == Before->ActionBar && !Player->GetActionBar()->GetSlot(State->ActionIndex).IsEmpty(), TEXT("Hotbar restored"));
 
 			Check(Saves->DeleteSave(Slot) && !Saves->HasSave(Slot), TEXT("Save slot can be deleted"));

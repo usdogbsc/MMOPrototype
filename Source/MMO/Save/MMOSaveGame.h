@@ -49,8 +49,8 @@ class UMMOSaveGame : public USaveGame
 
 public:
 
-	/** 2: hotbar, 3: profession skills */
-	static constexpr int32 CurrentVersion = 3;
+	/** 2: hotbar, 3: profession skills, 4: guide progress */
+	static constexpr int32 CurrentVersion = 4;
 
 	UPROPERTY()
 	int32 Version = CurrentVersion;
@@ -108,4 +108,7 @@ public:
 	/** Skill per EMMOProfession */
 	UPROPERTY()
 	TArray<int32> ProfessionSkills;
+
+	UPROPERTY()
+	TArray<FName> TutorialFlags;
 };
