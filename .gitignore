@@ -14,6 +14,7 @@ Saved/
 
 # Generated Visual Studio solution
 *.sln
+*.slnx
 
 # Build outputs
 Build/Receipts/
