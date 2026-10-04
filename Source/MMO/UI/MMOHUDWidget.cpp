@@ -9,6 +9,8 @@
 #include "UI/MMOVendorWindowWidget.h"
 #include "UI/MMOActionSlotWidget.h"
 #include "UI/MMOAbilityWidgets.h"
+#include "UI/MMOCraftingWindowWidget.h"
+#include "World/MMOCraftingStation.h"
 #include "Combat/MMOAbilityComponent.h"
 #include "Combat/MMOAbilityDefinition.h"
 #include "Components/ProgressBar.h"
@@ -230,13 +232,16 @@ void UMMOHUDWidget::BuildDefaultLayout()
 	AbilitiesWindow = WidgetTree->ConstructWidget<UMMOAbilitiesWindowWidget>(UMMOAbilitiesWindowWidget::StaticClass(), TEXT("AbilitiesWindow"));
 	Place(Root, AbilitiesWindow, FAnchors(0.0f, 0.5f), FVector2D(0.0f, 0.5f), FVector2D(340.0f, 0.0f));
 
+	CraftingWindow = WidgetTree->ConstructWidget<UMMOCraftingWindowWidget>(UMMOCraftingWindowWidget::StaticClass(), TEXT("CraftingWindow"));
+	Place(Root, CraftingWindow, FAnchors(0.0f, 0.5f), FVector2D(0.0f, 0.5f), FVector2D(24.0f, 20.0f));
+
 	VendorWindow = WidgetTree->ConstructWidget<UMMOVendorWindowWidget>(UMMOVendorWindowWidget::StaticClass(), TEXT("VendorWindow"));
 	Place(Root, VendorWindow, FAnchors(0.0f, 0.5f), FVector2D(0.0f, 0.5f), FVector2D(24.0f, 20.0f));
 
 	QuestLogWindow = WidgetTree->ConstructWidget<UMMOQuestLogWindowWidget>(UMMOQuestLogWindowWidget::StaticClass(), TEXT("QuestLogWindow"));
 	Place(Root, QuestLogWindow, FAnchors(0.5f, 0.5f), FVector2D(0.5f, 0.5f), FVector2D(0.0f, 0.0f));
 
-	for (UWidget* Window : { static_cast<UWidget*>(CharacterWindow), static_cast<UWidget*>(InventoryWindow), static_cast<UWidget*>(LootWindow), static_cast<UWidget*>(DialogueWindow), static_cast<UWidget*>(QuestLogWindow), static_cast<UWidget*>(VendorWindow), static_cast<UWidget*>(AbilitiesWindow) })
+	for (UWidget* Window : { static_cast<UWidget*>(CharacterWindow), static_cast<UWidget*>(InventoryWindow), static_cast<UWidget*>(LootWindow), static_cast<UWidget*>(DialogueWindow), static_cast<UWidget*>(QuestLogWindow), static_cast<UWidget*>(VendorWindow), static_cast<UWidget*>(AbilitiesWindow), static_cast<UWidget*>(CraftingWindow) })
 	{
 		Window->SetVisibility(ESlateVisibility::Collapsed);
 	}
@@ -287,6 +292,10 @@ void UMMOHUDWidget::NativeConstruct()
 	if (AbilitiesWindow)
 	{
 		AbilitiesWindow->OnCloseRequested.BindLambda([this]() { CloseWindowFromWidget(AbilitiesWindow); });
+	}
+	if (CraftingWindow)
+	{
+		CraftingWindow->OnCloseRequested.BindLambda([this]() { CloseWindowFromWidget(CraftingWindow); });
 	}
 }
 
@@ -437,6 +446,35 @@ bool UMMOHUDWidget::IsVendorOpen() const
 AMMONPC* UMMOHUDWidget::GetOpenVendor() const
 {
 	return IsVendorOpen() ? VendorWindow->GetVendor() : nullptr;
+}
+
+void UMMOHUDWidget::OpenCrafting(AMMOCraftingStation* Station)
+{
+	if (CraftingWindow && Station)
+	{
+		CraftingWindow->Open(BoundCharacter.Get(), Station);
+		CraftingWindow->SetVisibility(ESlateVisibility::Visible);
+		SetInventoryOpen(true);
+	}
+}
+
+void UMMOHUDWidget::CloseCrafting()
+{
+	if (CraftingWindow)
+	{
+		CraftingWindow->Close();
+		CraftingWindow->SetVisibility(ESlateVisibility::Collapsed);
+	}
+}
+
+bool UMMOHUDWidget::IsCraftingOpen() const
+{
+	return CraftingWindow && CraftingWindow->GetVisibility() == ESlateVisibility::Visible;
+}
+
+AMMOCraftingStation* UMMOHUDWidget::GetOpenStation() const
+{
+	return IsCraftingOpen() ? CraftingWindow->GetStation() : nullptr;
 }
 
 void UMMOHUDWidget::SetAbilitiesOpen(bool bOpen)
@@ -608,6 +646,10 @@ void UMMOHUDWidget::CloseWindowFromWidget(UWidget* Window)
 	else if (Window == VendorWindow)
 	{
 		CloseVendor();
+	}
+	else if (Window == CraftingWindow)
+	{
+		CloseCrafting();
 	}
 	else if (Window)
 	{

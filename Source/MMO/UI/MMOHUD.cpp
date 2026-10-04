@@ -5,6 +5,7 @@
 #include "MMOCharacter.h"
 #include "Items/MMOLootContainerComponent.h"
 #include "NPC/MMONPC.h"
+#include "World/MMOCraftingStation.h"
 #include "GameFramework/PlayerController.h"
 #include "Kismet/GameplayStatics.h"
 #include "Sound/SoundBase.h"
@@ -66,6 +67,16 @@ void AMMOHUD::Tick(float DeltaSeconds)
 		}
 	}
 
+	// crafting needs the station in reach
+	if (HUDWidget && HUDWidget->IsCraftingOpen())
+	{
+		const AMMOCraftingStation* Station = HUDWidget->GetOpenStation();
+		if (!Station || !Station->IsInReach(GetOwningPawn()))
+		{
+			CloseCrafting();
+		}
+	}
+
 	// so does trading
 	if (HUDWidget && HUDWidget->IsVendorOpen())
 	{
@@ -106,6 +117,33 @@ void AMMOHUD::ToggleAbilities()
 		const bool bOpen = !HUDWidget->IsAbilitiesOpen();
 		HUDWidget->SetAbilitiesOpen(bOpen);
 		PlayUISound(bOpen ? LoadedWindowOpenSound : LoadedWindowCloseSound);
+		UpdateInputMode();
+	}
+}
+
+void AMMOHUD::OpenCrafting(AMMOCraftingStation* Station)
+{
+	if (HUDWidget && Station)
+	{
+		const bool bWasOpen = HUDWidget->IsCraftingOpen();
+		HUDWidget->CloseDialogue();
+		HUDWidget->CloseVendor();
+		HUDWidget->CloseLoot();
+		HUDWidget->OpenCrafting(Station);
+		if (!bWasOpen)
+		{
+			PlayUISound(LoadedWindowOpenSound);
+		}
+		UpdateInputMode();
+	}
+}
+
+void AMMOHUD::CloseCrafting()
+{
+	if (HUDWidget && HUDWidget->IsCraftingOpen())
+	{
+		HUDWidget->CloseCrafting();
+		PlayUISound(LoadedWindowCloseSound);
 		UpdateInputMode();
 	}
 }
@@ -220,6 +258,7 @@ bool AMMOHUD::CloseAllWindows()
 	HUDWidget->CloseVendor();
 	HUDWidget->SetQuestLogOpen(false);
 	HUDWidget->SetAbilitiesOpen(false);
+	HUDWidget->CloseCrafting();
 	PlayUISound(LoadedWindowCloseSound);
 	UpdateInputMode();
 	return true;
@@ -227,7 +266,7 @@ bool AMMOHUD::CloseAllWindows()
 
 bool AMMOHUD::IsAnyWindowOpen() const
 {
-	return HUDWidget && (HUDWidget->IsInventoryOpen() || HUDWidget->IsCharacterOpen() || HUDWidget->IsLootOpen() || HUDWidget->IsDialogueOpen() || HUDWidget->IsQuestLogOpen() || HUDWidget->IsVendorOpen() || HUDWidget->IsAbilitiesOpen());
+	return HUDWidget && (HUDWidget->IsInventoryOpen() || HUDWidget->IsCharacterOpen() || HUDWidget->IsLootOpen() || HUDWidget->IsDialogueOpen() || HUDWidget->IsQuestLogOpen() || HUDWidget->IsVendorOpen() || HUDWidget->IsAbilitiesOpen() || HUDWidget->IsCraftingOpen());
 }
 
 void AMMOHUD::HandleWindowClosed()

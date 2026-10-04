@@ -53,6 +53,10 @@ protected:
 	UPROPERTY()
 	TObjectPtr<UTextBlock> SwingStatText;
 
+	/** One row per profession */
+	UPROPERTY()
+	TArray<TObjectPtr<UTextBlock>> ProfessionTexts;
+
 	UPROPERTY()
 	TObjectPtr<UButton> CloseButton;
 

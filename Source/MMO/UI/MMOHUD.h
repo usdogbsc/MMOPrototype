@@ -9,6 +9,7 @@
 class UMMOHUDWidget;
 class UMMOLootContainerComponent;
 class AMMONPC;
+class AMMOCraftingStation;
 class USoundBase;
 
 /**
@@ -30,6 +31,8 @@ public:
 	void CloseLoot();
 	void ToggleQuestLog();
 	void ToggleAbilities();
+	void OpenCrafting(AMMOCraftingStation* Station);
+	void CloseCrafting();
 	void OpenDialogue(AMMONPC* NPC);
 	void OpenVendor(AMMONPC* Vendor);
 	void CloseVendor();

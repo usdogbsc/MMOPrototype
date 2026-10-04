@@ -30,6 +30,7 @@
 #include "Items/MMOActionBarComponent.h"
 #include "Combat/MMOAbilityComponent.h"
 #include "Combat/MMOAbilityDefinition.h"
+#include "Professions/MMOProfessionComponent.h"
 #include "UI/MMOHUDWidget.h"
 #include "NPC/MMONPC.h"
 #include "Save/MMOSaveSubsystem.h"
@@ -119,6 +120,7 @@ AMMOCharacter::AMMOCharacter()
 	Cooldowns = CreateDefaultSubobject<UMMOCooldownComponent>(TEXT("Cooldowns"));
 	ActionBar = CreateDefaultSubobject<UMMOActionBarComponent>(TEXT("ActionBar"));
 	Abilities = CreateDefaultSubobject<UMMOAbilityComponent>(TEXT("Abilities"));
+	Professions = CreateDefaultSubobject<UMMOProfessionComponent>(TEXT("Professions"));
 
 	MainHandMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("MainHandMesh"));
 	MainHandMesh->SetupAttachment(GetMesh(), MainHandSocket);
@@ -1132,6 +1134,8 @@ bool AMMOCharacter::UseActionSlot(int32 Index)
 	}
 	if (Action.Type == EMMOActionType::Ability)
 	{
+		// fighting takes priority over gathering or crafting
+		Professions->Interrupt(false);
 		const EMMOAbilityResult Result = Abilities->UseAbility(UMMOAbilityDefinition::FindById(Action.Id));
 		return Result == EMMOAbilityResult::Success || Result == EMMOAbilityResult::CastStarted;
 	}
@@ -1328,6 +1332,11 @@ void AMMOCharacter::NotifyAbilityExecuted(UMMOAbilityDefinition* Ability, AActor
 	UE_LOG(LogMMO, Log, TEXT("Used %s"), *Ability->DisplayName.ToString());
 }
 
+bool AMMOCharacter::IsCasting() const
+{
+	return Abilities->IsCasting();
+}
+
 bool AMMOCharacter::GetActiveCast(FText& OutName, float& OutProgress) const
 {
 	if (const UMMOAbilityDefinition* Casting = Abilities->GetCastingAbility())
@@ -1336,7 +1345,7 @@ bool AMMOCharacter::GetActiveCast(FText& OutName, float& OutProgress) const
 		OutProgress = Abilities->GetCastProgress();
 		return true;
 	}
-	return false;
+	return Professions->GetActivity(OutName, OutProgress);
 }
 
 void AMMOCharacter::DoToggleQuestLog()
@@ -1362,6 +1371,9 @@ void AMMOCharacter::HandleLevelUp(int32 NewLevel)
 void AMMOCharacter::HandleDamaged(float Amount, AActor* DamageInstigator)
 {
 	LastDamageTakenTime = GetWorld()->GetTimeSeconds();
+
+	// so do gathering and crafting
+	Professions->Interrupt(true);
 
 	// eating stops when you get hit
 	if (FoodEndTime > LastDamageTakenTime)

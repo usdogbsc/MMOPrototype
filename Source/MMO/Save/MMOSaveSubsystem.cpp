@@ -7,6 +7,7 @@
 #include "Combat/MMOProgressionComponent.h"
 #include "Items/MMOEquipmentComponent.h"
 #include "Items/MMOActionBarComponent.h"
+#include "Professions/MMOProfessionComponent.h"
 #include "Items/MMOInventoryComponent.h"
 #include "Items/MMOItemDefinition.h"
 #include "Quests/MMOQuestDefinition.h"
@@ -97,6 +98,7 @@ UMMOSaveGame* UMMOSaveSubsystem::Capture(const AMMOCharacter* Character, UObject
 	Save->CompletedQuests = QuestLog->GetCompletedQuestIds().Array();
 	Save->Discovered = Character->GetExploration()->GetDiscovered().Array();
 	Save->ActionBar = Character->GetActionBar()->GetSlots();
+	Save->ProfessionSkills = Character->GetProfessions()->GetSkills();
 	return Save;
 }
 
@@ -154,6 +156,11 @@ bool UMMOSaveSubsystem::Apply(const UMMOSaveGame* Save, AMMOCharacter* Character
 		}
 	}
 	Character->GetQuestLog()->RestoreState(Active, TSet<FName>(Save->CompletedQuests));
+
+	if (Save->Version >= 3)
+	{
+		Character->GetProfessions()->RestoreSkills(Save->ProfessionSkills);
+	}
 
 	// version 1 saves had no hotbar: keep the current one
 	if (Save->Version >= 2)

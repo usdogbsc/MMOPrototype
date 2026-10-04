@@ -11,6 +11,7 @@
 #include "Items/MMOInventoryComponent.h"
 #include "Items/MMOItemDefinition.h"
 #include "Blueprint/WidgetTree.h"
+#include "Professions/MMOProfessionComponent.h"
 #include "Components/Border.h"
 #include "Components/Button.h"
 #include "Components/HorizontalBox.h"
@@ -78,6 +79,10 @@ void UMMOCharacterWindowWidget::BuildLayout()
 	DamageStatText = AddStatRow(Stats, TEXT("Damage per swing"));
 	ArmorStatText = AddStatRow(Stats, TEXT("Armor"));
 	SwingStatText = AddStatRow(Stats, TEXT("Swing interval"));
+	for (int32 Index = 0; Index < static_cast<int32>(EMMOProfession::Count); ++Index)
+	{
+		ProfessionTexts.Add(AddStatRow(Stats, MMOProfessions::GetName(static_cast<EMMOProfession>(Index)).ToString()));
+	}
 	Content->AddChildToVerticalBox(StatsPanel);
 }
 
@@ -201,6 +206,10 @@ void UMMOCharacterWindowWidget::RefreshStats()
 	if (SwingStatText)
 	{
 		SwingStatText->SetText(FText::FromString(FString::Printf(TEXT("%.1fs"), Combat->BasicAttackCooldown)));
+	}
+	for (int32 Index = 0; Index < ProfessionTexts.Num(); ++Index)
+	{
+		ProfessionTexts[Index]->SetText(FText::FromString(FString::Printf(TEXT("%d / %d"), Owner->GetProfessions()->GetSkill(static_cast<EMMOProfession>(Index)), MMOProfessions::MaxSkill)));
 	}
 }
 

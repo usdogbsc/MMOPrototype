@@ -28,6 +28,8 @@ class UMMOVendorWindowWidget;
 class UMMOActionSlotWidget;
 class UHorizontalBox;
 class UMMOAbilitiesWindowWidget;
+class UMMOCraftingWindowWidget;
+class AMMOCraftingStation;
 class UMMOAbilityDefinition;
 class UProgressBar;
 
@@ -74,6 +76,12 @@ public:
 
 	/** Hotbar buttons for keys 2-9 */
 	const TArray<TObjectPtr<UMMOActionSlotWidget>>& GetActionSlots() const { return ActionSlots; }
+
+	void OpenCrafting(AMMOCraftingStation* Station);
+	void CloseCrafting();
+	bool IsCraftingOpen() const;
+	AMMOCraftingStation* GetOpenStation() const;
+	UMMOCraftingWindowWidget* GetCraftingWindow() const { return CraftingWindow; }
 
 	void SetAbilitiesOpen(bool bOpen);
 	bool IsAbilitiesOpen() const;
@@ -172,6 +180,9 @@ protected:
 
 	UPROPERTY(BlueprintReadOnly, Category="HUD", meta=(BindWidgetOptional))
 	TObjectPtr<UMMOAbilitiesWindowWidget> AbilitiesWindow;
+
+	UPROPERTY(BlueprintReadOnly, Category="HUD", meta=(BindWidgetOptional))
+	TObjectPtr<UMMOCraftingWindowWidget> CraftingWindow;
 
 	/** Cast bar above the hotbar */
 	UPROPERTY(BlueprintReadOnly, Category="HUD", meta=(BindWidgetOptional))

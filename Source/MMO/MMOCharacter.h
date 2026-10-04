@@ -31,6 +31,7 @@ class UMMOCooldownComponent;
 class UMMOActionBarComponent;
 class UMMOAbilityComponent;
 class UMMOAbilityDefinition;
+class UMMOProfessionComponent;
 class AMMONPC;
 class UStaticMeshComponent;
 class AMMOCreature;
@@ -102,6 +103,10 @@ class AMMOCharacter : public ACharacter, public IMMOMeleeAttacker
 	/** Known abilities, casting and their effects */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Components", meta = (AllowPrivateAccess = "true"))
 	TObjectPtr<UMMOAbilityComponent> Abilities;
+
+	/** Gathering / crafting skills and activities */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Components", meta = (AllowPrivateAccess = "true"))
+	TObjectPtr<UMMOProfessionComponent> Professions;
 
 	/** Hotbar keys 2-9 */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Components", meta = (AllowPrivateAccess = "true"))
@@ -565,7 +570,10 @@ public:
 	/** Floating text at a world location, e.g. "Stunned" */
 	void ShowWorldText(const FVector& Location, const FString& Text, const FLinearColor& Color) const;
 
-	/** What the cast bar shows: true while casting */
+	/** True while an ability cast is in progress */
+	bool IsCasting() const;
+
+	/** What the cast bar shows: true while casting, gathering or crafting */
 	bool GetActiveCast(FText& OutName, float& OutProgress) const;
 
 	/** Uses hotbar slot 0-7 (keys 2-9). Returns true if something happened */
@@ -657,5 +665,7 @@ public:
 	FORCEINLINE UMMOActionBarComponent* GetActionBar() const { return ActionBar; }
 
 	FORCEINLINE UMMOAbilityComponent* GetAbilities() const { return Abilities; }
+
+	FORCEINLINE UMMOProfessionComponent* GetProfessions() const { return Professions; }
 };
 

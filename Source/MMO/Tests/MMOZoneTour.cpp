@@ -3,7 +3,7 @@
 // Development-only visual tour of the Thornwick zone:
 //   mmo.tour        teleports the player through the zone's key viewpoints, saving a screenshot at each
 //   mmo.tour quit   ...and exits when done (add viewpoint names, e.g. "mmo.tour Hollis Doran", to visit only those)
-//   mmo.goto <Name> teleports to one viewpoint (Village, Gate, Meadow, Tower, Stones, Woods, Camp, Den, Waterfall, Hollow, Mine, Overview, Hollis, Brenna, Doran, Pell)
+//   mmo.goto <Name> teleports to one viewpoint (Village, Gate, Meadow, Tower, Stones, Woods, Camp, Den, Waterfall, Hollow, Mine, Overview, Hollis, Brenna, Doran, Pell, Copper, Herbs)
 // The player is invulnerable during the tour.
 
 #include "CoreMinimal.h"
@@ -49,6 +49,8 @@ namespace MMOZoneTour
 		{ TEXT("Brenna"),       -1.0f,  -130.0f,  -156.0f,  -8.0f,  450.0f },
 		{ TEXT("Doran"),      1180.0f,   178.0f,    11.0f,  -8.0f,  450.0f },
 		{ TEXT("Pell"),        389.0f,   -94.0f,   -46.0f,  -8.0f,  450.0f },
+		{ TEXT("Copper"),     7250.0f,  4150.0f,    45.0f, -14.0f,  420.0f },
+		{ TEXT("Herbs"),      4350.0f, -1250.0f,    50.0f, -18.0f,  380.0f },
 	};
 
 	struct FTour
@@ -165,7 +167,7 @@ namespace MMOZoneTour
 				return;
 			}
 		}
-		UE_LOG(LogMMO, Warning, TEXT("mmo.goto: unknown place. Try Village, Square, Gate, Meadow, Tower, Stones, Wagon, Woods, Camp, Den, Waterfall, Hollow, Mine, Overview, Hollis, Brenna, Doran, Pell"));
+		UE_LOG(LogMMO, Warning, TEXT("mmo.goto: unknown place. Try Village, Square, Gate, Meadow, Tower, Stones, Wagon, Woods, Camp, Den, Waterfall, Hollow, Mine, Overview, Hollis, Brenna, Doran, Pell, Copper, Herbs"));
 	}
 }
 

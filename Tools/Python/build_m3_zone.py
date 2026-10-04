@@ -1058,11 +1058,11 @@ NPCS = [
     dict(id="Doran", name="Doran Ironmantle", title="Blacksmith", forge=(280, -20),
          tints=[(0.05, 0.05, 0.06), (0.2, 0.1, 0.04)],
          greeting="Mind the sparks. If it's steel you're after, I'm the only anvil between here and the mountains.",
-         quests=["FangsForTheForge", "TheBeastOfFanghollow"], stock=["IronShortsword", "PaddedLeatherVest", "SturdyLeatherLeggings"], hat=(CYL, "ash", (0, 0, 90), (0.29, 0.29, 0.1))),
+         quests=["FangsForTheForge", "TheBeastOfFanghollow", "AVeinOfCopper"], stock=["IronShortsword", "PaddedLeatherVest", "SturdyLeatherLeggings"], hat=(CYL, "ash", (0, 0, 90), (0.29, 0.29, 0.1))),
     dict(id="Mirelle", name="Mirelle Thistledown", title="Herbalist", stall=(-110, 0), body="Quinn",
          tints=[(0.12, 0.2, 0.08), (0.28, 0.14, 0.3)],
          greeting="Feverfew, thornleaf, a pinch of wolfsbane... not for drinking, that one. Looking for something to keep you on your feet out there?",
-         quests=[], stock=["MinorHealingPotion"], hat=(CONE, "cloth_green", (0, 0, 98), (0.3, 0.3, 0.3))),
+         quests=["ThornleafHarvest"], stock=["MinorHealingPotion", "EmptyVial"], hat=(CONE, "cloth_green", (0, 0, 98), (0.3, 0.3, 0.3))),
     dict(id="Pell", name="Old Pell", title="Retired Miner", at=(700, -420), look=(300, 0),
          tints=[(0.12, 0.09, 0.06), (0.1, 0.13, 0.22)],
          greeting="Forty years I swung a pick in the Rustvein, east past the Greywood. They boarded it up after the deep tunnels went "
@@ -1116,6 +1116,102 @@ def build_npcs():
         actor.set_editor_property("accessory_material", MATS[mat])
         actor.set_editor_property("accessory_transform", unreal.Transform(unreal.Vector(*offset), unreal.Rotator(0, 0, 0), unreal.Vector(*scale)))
         log("NPC %s at (%d, %d)" % (spec["id"], x, y))
+
+
+# =====================================================================================================================
+# Gathering and crafting (Milestone 8)
+# =====================================================================================================================
+
+COPPER_VEINS = [(7600, 4500), (8900, 4600), (6050, -3300), (9500, -3150), (4400, 1700), (12900, -900), (20700, -1150), (21050, -2350)]
+THORNLEAF = [(4650, -900), (5850, 1850), (7450, -2550), (8650, 850), (6850, 3750), (10250, -1250), (3900, 2650), (9900, 2900)]
+DUSKROOT = [(12450, -3400), (14850, 1500), (16850, -2500), (17850, 2450), (15550, -5650), (13500, 3600)]
+
+
+def gather_node(x, y, i, profession, name, skill, item_id, base, accent, scale, lift, label, folder, yield_range=(1, 2)):
+    actor = ACTORS.spawn_actor_from_class(unreal.MMOGatherNode, unreal.Vector(x, y, ground(x, y) + lift), unreal.Rotator(0, 0, (i * 67) % 360))
+    actor.set_actor_label("%s_%d" % (label, i))
+    actor.set_folder_path(folder)
+    actor.set_actor_scale3d(unreal.Vector(scale, scale, scale))
+    actor.set_editor_property("profession", profession)
+    actor.set_editor_property("display_name", name)
+    actor.set_editor_property("required_skill", skill)
+    actor.set_editor_property("yield_item_id", item_id)
+    actor.set_editor_property("min_yield", yield_range[0])
+    actor.set_editor_property("max_yield", yield_range[1])
+    actor.set_editor_property("base_color", unreal.LinearColor(*base, 1.0))
+    actor.set_editor_property("accent_color", unreal.LinearColor(*accent, 1.0))
+    actor.set_editor_property("look_seed", 100 + i)
+    return actor
+
+
+def recipe(recipe_id):
+    path = "/Game/MMO/Recipes/DA_Recipe_" + recipe_id
+    asset = unreal.load_asset(path) if unreal.EditorAssetLibrary.does_asset_exist(path) else None
+    if not asset:
+        log("WARNING: missing recipe %s (run setup_m8_crafting.py)" % recipe_id)
+    return asset
+
+
+def station(location, yaw, profession, name, recipes, label, plate_height=170):
+    actor = ACTORS.spawn_actor_from_class(unreal.MMOCraftingStation, unreal.Vector(*location), unreal.Rotator(0, 0, yaw))
+    actor.set_actor_label(label)
+    actor.set_folder_path("Village/Crafting")
+    actor.set_editor_property("profession", profession)
+    actor.set_editor_property("display_name", name)
+    actor.set_editor_property("recipes", [r for r in (recipe(rid) for rid in recipes) if r])
+    actor.set_editor_property("plate_height", float(plate_height))
+    return actor
+
+
+def build_crafting():
+    P = unreal.MMOProfession
+    for i, (x, y) in enumerate(COPPER_VEINS):
+        gather_node(x, y, i, P.MINING, "Copper Vein", 1, "CopperOre", (0.075, 0.07, 0.065), (0.8, 0.34, 0.08), 0.9, 18, "Node_CopperVein", "Gathering/Copper")
+    for i, (x, y) in enumerate(THORNLEAF):
+        gather_node(x, y, i, P.HERBALISM, "Thornleaf", 1, "Thornleaf", (0.035, 0.14, 0.06), (0.95, 0.95, 0.88), 1.1, 8, "Node_Thornleaf", "Gathering/Thornleaf")
+    for i, (x, y) in enumerate(DUSKROOT):
+        gather_node(x, y, i, P.HERBALISM, "Duskroot", 15, "Duskroot", (0.025, 0.07, 0.04), (0.42, 0.08, 0.6), 1.1, 8, "Node_Duskroot", "Gathering/Duskroot")
+
+    plaza = (300, 0)
+    forge = Frame(1900, 300, facing_point(1900, 300, *plaza))
+    station(forge.at(-40, -150, 0), forge.yaw, P.SMITHING, "Thornwick Forge",
+            ["SmeltCopper", "CopperBand", "CopperStuddedGloves", "CopperforgedBlade"], "Station_Forge", 230)
+
+    # alchemy table beside Mirelle's stall: a bench with flasks and a little burner
+    stall = Frame(900, -950, facing_point(900, -950, *plaza))
+    table = Frame(*stall.at(40, 290, 0)[:2], stall.yaw)
+    fold = "Village/Crafting/AlchemyTable"
+    table.put(CUBE, 0, 0, 80, (90, 170, 10), "planks", folder=fold)
+    for ly in (-70, 70):
+        for lx in (-35, 35):
+            table.put(CUBE, lx, ly, 40, (8, 8, 80), "timber", folder=fold)
+    table.put(CYL, 10, -45, 100, (22, 22, 30), "foam", folder=fold, collide=False)
+    table.put(SPHERE, -12, 20, 98, (26, 26, 26), "glow_water", folder=fold, collide=False)
+    table.put(CYL, 15, 55, 96, (16, 16, 22), "cloth_red", folder=fold, collide=False)
+    table.put(CUBE, -20, -10, 90, (14, 14, 10), "glow_ember", folder=fold, collide=False, shadow=False)
+    station(table.at(0, 0, 0), table.yaw, P.ALCHEMY, "Alchemy Table", ["BrewMinorHealingPotion", "BrewHealingPotion"], "Station_Alchemy", 170)
+
+    # cookfire in front of the inn: a ring of stones, embers and a spit
+    inn = Frame(-1100, -900, facing_point(-1100, -900, *plaza))
+    fire = Frame(*inn.at(1000, -560, 0)[:2], inn.yaw)
+    fold = "Village/Crafting/Cookfire"
+    for k in range(8):
+        a = math.radians(k * 45)
+        fire.put(SPHERE, 55 * math.cos(a), 55 * math.sin(a), 8, (30, 30, 22), "rock", folder=fold, collide=False)
+    fire.put(CYL, 0, 0, 4, (80, 80, 6), "ash", folder=fold, collide=False)
+    fire.put(CUBE, 0, 0, 12, (45, 45, 10), "glow_ember", folder=fold, collide=False, shadow=False)
+    for ly in (-60, 60):
+        fire.put(CUBE, 0, ly, 45, (6, 6, 90), "timber", folder=fold)
+    fire.put(CYL, 0, 0, 85, (6, 6, 130), "timber", roll=90, folder=fold, collide=False)
+    station(fire.at(0, 0, 0), fire.yaw, P.COOKING, "Cookfire", ["RoastWolfHaunch"], "Station_Cookfire", 130)
+    light = ACTORS.spawn_actor_from_class(unreal.PointLight, unreal.Vector(*fire.at(0, 0, 60)))
+    light.set_folder_path(fold)
+    component = light.get_component_by_class(unreal.PointLightComponent)
+    component.set_editor_property("intensity", 22.0)
+    component.set_editor_property("light_color", unreal.Color(255, 140, 60, 255))
+    component.set_editor_property("attenuation_radius", 450.0)
+    component.set_editor_property("cast_shadows", False)
+    log("Gathering nodes: %d copper, %d thornleaf, %d duskroot; 3 crafting stations" % (len(COPPER_VEINS), len(THORNLEAF), len(DUSKROOT)))
 
 
 ZONES = [
@@ -1177,6 +1273,7 @@ def main():
     build_vegetation()
     build_creatures()
     build_npcs()
+    build_crafting()
     build_zones()
     build_navigation_and_start()
 

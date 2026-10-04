@@ -43,6 +43,11 @@
 #include "Save/MMOSaveGame.h"
 #include "Combat/MMOCooldownComponent.h"
 #include "Combat/MMOAbilityComponent.h"
+#include "Professions/MMOProfessionComponent.h"
+#include "Professions/MMORecipeDefinition.h"
+#include "World/MMOGatherNode.h"
+#include "World/MMOCraftingStation.h"
+#include "UI/MMOCraftingWindowWidget.h"
 #include "Combat/MMOAbilityDefinition.h"
 #include "Items/MMOActionBarComponent.h"
 #include "UI/MMOVendorWindowWidget.h"
@@ -76,6 +81,8 @@ namespace MMOSelfTest
 		float HealthMark = 0.0f;
 		int32 ActionIndex = INDEX_NONE;
 		TWeakObjectPtr<AMMOCreature> AbilityTarget;
+		TWeakObjectPtr<AMMOGatherNode> Node;
+		int32 SkillMark = 0;
 		TWeakObjectPtr<AMMOCreature> AbilityBystander;
 		float OtherMark = 0.0f;
 		float OtherHealthMark = 0.0f;
@@ -250,6 +257,30 @@ namespace MMOSelfTest
 		for (TActorIterator<AMMOCreature> It(World); It; ++It)
 		{
 			if (It->QuestTag == QuestTag && !It->GetHealth()->IsDead())
+			{
+				return *It;
+			}
+		}
+		return nullptr;
+	}
+
+	static AMMOGatherNode* FindNode(UWorld* World, FName ItemId, const AMMOGatherNode* Except = nullptr)
+	{
+		for (TActorIterator<AMMOGatherNode> It(World); It; ++It)
+		{
+			if (It->YieldItemId == ItemId && !It->IsDepleted() && *It != Except)
+			{
+				return *It;
+			}
+		}
+		return nullptr;
+	}
+
+	static AMMOCraftingStation* FindStation(UWorld* World, EMMOProfession Profession)
+	{
+		for (TActorIterator<AMMOCraftingStation> It(World); It; ++It)
+		{
+			if (It->Profession == Profession)
 			{
 				return *It;
 			}
@@ -795,6 +826,7 @@ namespace MMOSelfTest
 			AMMOCreature* B = State->Pack[1].Get();
 			const FVector Middle = (A->GetSpawnTransform().GetLocation() + B->GetSpawnTransform().GetLocation()) * 0.5f;
 			PlacePlayerNear(Middle, 450.0f);
+			State->bFlag = false;
 			NextStep();
 			break;
 		}
@@ -823,6 +855,15 @@ namespace MMOSelfTest
 			{
 				Check(false, TEXT("Both wolves of the pair aggroed"));
 				NextStep();
+			}
+			else if (!State->bFlag && Elapsed() > 2.5f)
+			{
+				// an idle wolf may have wandered to the far side of its territory: walk toward the one that hasn't noticed us
+				State->bFlag = true;
+				if (AMMOCreature* Unaware = !InCombat(A) ? A : (!InCombat(B) ? B : nullptr))
+				{
+					PlacePlayerNear(Unaware->GetActorLocation(), 350.0f);
+				}
 			}
 			break;
 		}
@@ -1470,7 +1511,154 @@ namespace MMOSelfTest
 			}
 			break;
 
-		case 47: // save, scramble everything, load: the character comes back exactly as it was (Milestone 5)
+		case 47: // gathering (Milestone 8)
+		{
+			AMMOGatherNode* Vein = FindNode(World, TEXT("CopperOre"));
+			if (!Vein)
+			{
+				UE_LOG(LogMMO, Display, TEXT("MMO SELFTEST: no gathering nodes in this map, skipping the profession checks"));
+				State->Step = 53;
+				State->StepStart = Now();
+				break;
+			}
+			UMMOProfessionComponent* Professions = Player->GetProfessions();
+			Check(Professions->GetSkill(EMMOProfession::Mining) == 1 && Professions->GetSkill(EMMOProfession::Smithing) == 1, TEXT("Professions start at skill 1"));
+			UMMOItemDefinition* Ore = UMMOItemDefinition::FindById(TEXT("CopperOre"));
+			State->CounterMark = Inventory->CountItem(Ore);
+			State->Node = Vein;
+
+			PlacePlayerNear(Vein->GetActorLocation(), 160.0f);
+			Check(Player->TryInteract(Vein) && Professions->IsBusy(), TEXT("Right-clicking a copper vein starts mining"));
+			FText CastName;
+			float Progress = 0.0f;
+			Check(Player->GetActiveCast(CastName, Progress) && CastName.ToString().Contains(TEXT("Copper")), FString::Printf(TEXT("Cast bar shows \"%s\""), *CastName.ToString()));
+			NextStep();
+			break;
+		}
+
+		case 48:
+			if (Elapsed() > (State->Node.IsValid() ? State->Node->GatherTime : 2.5f) + 0.3f)
+			{
+				UMMOProfessionComponent* Professions = Player->GetProfessions();
+				UMMOItemDefinition* Ore = UMMOItemDefinition::FindById(TEXT("CopperOre"));
+				AMMOGatherNode* Vein = State->Node.Get();
+				Check(!Professions->IsBusy() && Inventory->CountItem(Ore) > State->CounterMark, FString::Printf(TEXT("Mining yields copper ore (+%d)"), Inventory->CountItem(Ore) - State->CounterMark));
+				Check(Vein && Vein->IsDepleted() && Vein->IsHidden() && !Vein->CanInteract(Player), TEXT("A mined vein disappears until it respawns"));
+				Check(Professions->GetSkill(EMMOProfession::Mining) == 2, TEXT("Mining skill rises to 2"));
+
+				// moving interrupts gathering
+				AMMOGatherNode* Other = FindNode(World, TEXT("CopperOre"), Vein);
+				State->Node = Other;
+				State->CounterMark = Inventory->CountItem(Ore);
+				if (Other)
+				{
+					PlacePlayerNear(Other->GetActorLocation(), 160.0f);
+					Player->TryInteract(Other);
+					Player->SetActorLocation(Player->GetActorLocation() + FVector(0.0f, 0.0f, 0.0f) + Player->GetActorRightVector() * 80.0f, false, nullptr, ETeleportType::TeleportPhysics);
+				}
+				NextStep();
+			}
+			break;
+
+		case 49:
+			if (Elapsed() > 0.3f)
+			{
+				UMMOProfessionComponent* Professions = Player->GetProfessions();
+				UMMOItemDefinition* Ore = UMMOItemDefinition::FindById(TEXT("CopperOre"));
+				Check(State->Node.IsValid() && !Professions->IsBusy() && !State->Node->IsDepleted() && Inventory->CountItem(Ore) == State->CounterMark,
+					TEXT("Moving interrupts mining (nothing gathered, vein stays)"));
+
+				if (AMMOGatherNode* Duskroot = FindNode(World, TEXT("Duskroot")))
+				{
+					PlacePlayerNear(Duskroot->GetActorLocation(), 160.0f);
+					Check(Professions->StartGather(Duskroot) == EMMOProfessionResult::SkillTooLow && !Professions->IsBusy(), TEXT("Duskroot needs Herbalism 15"));
+				}
+
+				// crafting at the forge
+				AMMOCraftingStation* Forge = FindStation(World, EMMOProfession::Smithing);
+				UMMOItemDefinition* Bar = UMMOItemDefinition::FindById(TEXT("CopperBar"));
+				Check(Forge && Forge->Recipes.Num() >= 4 && Bar, TEXT("The forge has smithing recipes"));
+				if (!Forge || !Bar)
+				{
+					Finish();
+					return false;
+				}
+				PlacePlayerNear(Forge->GetActorLocation(), 180.0f);
+				Check(Player->TryInteract(Forge) && HUDOf(Player)->GetHUDWidget()->IsCraftingOpen() && HUDOf(Player)->GetHUDWidget()->GetOpenStation() == Forge,
+					TEXT("Using the forge opens the crafting window"));
+
+				Inventory->RemoveItem(Ore, Inventory->CountItem(Ore));
+				Inventory->RemoveItem(Bar, Inventory->CountItem(Bar));
+				Inventory->AddItem(Ore, 5);
+				State->SkillMark = Professions->GetSkill(EMMOProfession::Smithing);
+				UMMORecipeDefinition* Smelt = UMMORecipeDefinition::FindById(TEXT("SmeltCopper"));
+				Check(Smelt && Professions->StartCraft(Smelt, 1000, Forge) == EMMOProfessionResult::Started && Professions->GetCraftsRemaining() == 2,
+					TEXT("Craft All queues as many bars as the ore allows (5 ore -> 2 bars)"));
+				NextStep();
+			}
+			break;
+
+		case 50:
+		{
+			UMMORecipeDefinition* Smelt = UMMORecipeDefinition::FindById(TEXT("SmeltCopper"));
+			if (Elapsed() > (Smelt ? Smelt->CraftTime : 2.0f) * 2.0f + 0.4f)
+			{
+				UMMOProfessionComponent* Professions = Player->GetProfessions();
+				UMMOItemDefinition* Ore = UMMOItemDefinition::FindById(TEXT("CopperOre"));
+				UMMOItemDefinition* Bar = UMMOItemDefinition::FindById(TEXT("CopperBar"));
+				Check(!Professions->IsBusy() && Inventory->CountItem(Bar) == 2 && Inventory->CountItem(Ore) == 1, TEXT("Smelting turned 4 ore into 2 bars"));
+				Check(Professions->GetSkill(EMMOProfession::Smithing) == State->SkillMark + 2, TEXT("Each craft raised Smithing"));
+				Check(Professions->StartCraft(UMMORecipeDefinition::FindById(TEXT("CopperforgedBlade")), 1, FindStation(World, EMMOProfession::Smithing)) == EMMOProfessionResult::SkillTooLow,
+					TEXT("High-level recipes need more skill"));
+				Check(Professions->StartCraft(UMMORecipeDefinition::FindById(TEXT("CopperBand")), 1, FindStation(World, EMMOProfession::Smithing)) == EMMOProfessionResult::SkillTooLow
+					|| Professions->CanCraft(UMMORecipeDefinition::FindById(TEXT("CopperBand"))) == EMMOProfessionResult::MissingIngredients,
+					TEXT("Recipes need their reagents"));
+				Professions->SetSkill(EMMOProfession::Smithing, 5);
+				Check(Professions->CanCraft(UMMORecipeDefinition::FindById(TEXT("CopperBand"))) == EMMOProfessionResult::MissingIngredients, TEXT("Copper Band needs 3 bars (only 2 carried)"));
+				State->bFlag = false;
+				NextStep();
+			}
+			break;
+		}
+
+		case 51: // screenshot the forge, then cook at the cookfire
+			if (!State->bFlag && Elapsed() > 0.5f)
+			{
+				Shot(TEXT("13_Crafting"));
+				State->bFlag = true;
+			}
+			else if (State->bFlag && Elapsed() > 0.9f)
+			{
+				State->bFlag = false;
+				AMMOCraftingStation* Fire = FindStation(World, EMMOProfession::Cooking);
+				UMMOItemDefinition* Meat = UMMOItemDefinition::FindById(TEXT("RawWolfMeat"));
+				Check(Fire && Meat, TEXT("A cookfire exists"));
+				if (!Fire || !Meat)
+				{
+					Finish();
+					return false;
+				}
+				PlacePlayerNear(Fire->GetActorLocation(), 180.0f);
+				Inventory->RemoveItem(Meat, Inventory->CountItem(Meat));
+				Inventory->AddItem(Meat, 2);
+				Check(Player->GetProfessions()->StartCraft(UMMORecipeDefinition::FindById(TEXT("RoastWolfHaunch")), 1, Fire) == EMMOProfessionResult::Started, TEXT("Start roasting wolf meat"));
+				NextStep();
+			}
+			break;
+
+		case 52:
+			if (Elapsed() > 2.4f)
+			{
+				UMMOItemDefinition* Haunch = UMMOItemDefinition::FindById(TEXT("RoastedWolfHaunch"));
+				UMMOItemDefinition* Meat = UMMOItemDefinition::FindById(TEXT("RawWolfMeat"));
+				Check(Inventory->CountItem(Haunch) >= 1 && Inventory->CountItem(Meat) == 0 && Player->GetProfessions()->GetSkill(EMMOProfession::Cooking) == 2,
+					TEXT("Cooking turns 2 raw meat into a Roasted Wolf Haunch (+1 Cooking)"));
+				Check(!HUDOf(Player)->GetHUDWidget()->IsCraftingOpen(), TEXT("Walking away from the forge closed its crafting window"));
+				NextStep();
+			}
+			break;
+
+		case 53: // save, scramble everything, load: the character comes back exactly as it was (Milestone 5)
 		{
 			UMMOSaveSubsystem* Saves = World->GetGameInstance()->GetSubsystem<UMMOSaveSubsystem>();
 			Check(Saves && !Saves->IsPersistenceEnabled(), TEXT("Autosave is off during the self-test (real progress is never overwritten)"));
@@ -1510,6 +1698,7 @@ namespace MMOSelfTest
 			Inventory->SetCurrency(0);
 			Equipment->ClearEquipment();
 			Player->GetActionBar()->RestoreSlots({});
+			Player->GetProfessions()->RestoreSkills({});
 			Progression->ResetProgression();
 			QuestLog->RestoreState({}, {});
 			Player->GetExploration()->RestoreDiscovered({});
@@ -1541,6 +1730,7 @@ namespace MMOSelfTest
 			Check(bSameQuests, TEXT("Active quests (with progress) and completed quests restored"));
 			Check(TSet<FName>(After->Discovered).Num() == Before->Discovered.Num() && TSet<FName>(After->Discovered).Includes(TSet<FName>(Before->Discovered)), TEXT("Discovered places restored"));
 			Check(FVector::Dist(Player->GetActorLocation(), Location) < 60.0f, TEXT("Position restored"));
+			Check(After->ProfessionSkills == Before->ProfessionSkills, TEXT("Profession skills restored"));
 			Check(After->ActionBar == Before->ActionBar && !Player->GetActionBar()->GetSlot(State->ActionIndex).IsEmpty(), TEXT("Hotbar restored"));
 
 			Check(Saves->DeleteSave(Slot) && !Saves->HasSave(Slot), TEXT("Save slot can be deleted"));
