@@ -29,6 +29,7 @@ public:
 	void OpenLoot(UMMOLootContainerComponent* Container);
 	void CloseLoot();
 	void ToggleQuestLog();
+	void ToggleAbilities();
 	void OpenDialogue(AMMONPC* NPC);
 	void OpenVendor(AMMONPC* Vendor);
 	void CloseVendor();

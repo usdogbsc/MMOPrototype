@@ -11,10 +11,11 @@ class UImage;
 class USizeBox;
 class UTextBlock;
 class UMMOItemSlotWidget;
+class UMMOAbilityTooltipWidget;
 
 /**
- *  One hotbar button (keys 2-9): shows the assigned item with its backpack count and cooldown sweep.
- *  Click to use, right-click to clear, drop a usable item from the backpack to assign it.
+ *  One hotbar button (keys 2-9): an item (with backpack count) or an ability, with a cooldown sweep.
+ *  Click to use, right-click to clear, drop a usable item or an ability on it to assign it.
  */
 UCLASS()
 class UMMOActionSlotWidget : public UUserWidget
@@ -38,6 +39,15 @@ protected:
 	TObjectPtr<UMMOItemSlotWidget> ItemSlot;
 
 	UPROPERTY()
+	TObjectPtr<UImage> AbilityIcon;
+
+	UPROPERTY()
+	TObjectPtr<UTextBlock> AbilityInitials;
+
+	UPROPERTY()
+	TObjectPtr<UMMOAbilityTooltipWidget> AbilityTooltip;
+
+	UPROPERTY()
 	TObjectPtr<USizeBox> CooldownShade;
 
 	UPROPERTY()
@@ -50,6 +60,7 @@ protected:
 	int32 Index = INDEX_NONE;
 	int32 ShownCount = -1;
 	FName ShownId;
+	uint8 ShownType = 0;
 
 	virtual void NativeOnInitialized() override;
 	virtual void NativeTick(const FGeometry& MyGeometry, float InDeltaTime) override;
@@ -57,4 +68,5 @@ protected:
 	virtual bool NativeOnDrop(const FGeometry& InGeometry, const FDragDropEvent& InDragDropEvent, UDragDropOperation* InOperation) override;
 
 	void Refresh();
+	void SetCooldown(float Remaining, float Duration);
 };

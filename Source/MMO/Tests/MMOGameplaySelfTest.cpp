@@ -42,6 +42,8 @@
 #include "NPC/MMONPC.h"
 #include "Save/MMOSaveGame.h"
 #include "Combat/MMOCooldownComponent.h"
+#include "Combat/MMOAbilityComponent.h"
+#include "Combat/MMOAbilityDefinition.h"
 #include "Items/MMOActionBarComponent.h"
 #include "UI/MMOVendorWindowWidget.h"
 #include "Save/MMOSaveSubsystem.h"
@@ -73,6 +75,9 @@ namespace MMOSelfTest
 		double Mark = 0.0;
 		float HealthMark = 0.0f;
 		int32 ActionIndex = INDEX_NONE;
+		TWeakObjectPtr<AMMOCreature> AbilityTarget;
+		TWeakObjectPtr<AMMOCreature> AbilityBystander;
+		float OtherMark = 0.0f;
 		float OtherHealthMark = 0.0f;
 		int32 CounterMark = 0;
 		int32 HitCount = 0;
@@ -1284,7 +1289,188 @@ namespace MMOSelfTest
 			}
 			break;
 
-		case 41: // save, scramble everything, load: the character comes back exactly as it was (Milestone 5)
+		case 41: // abilities: level unlocks, hotbar, range and the global cooldown (Milestone 7)
+		{
+			UMMOAbilityComponent* Abilities = Player->GetAbilities();
+			UMMOAbilityDefinition* Rend = UMMOAbilityDefinition::FindById(TEXT("RendingStrike"));
+			UMMOAbilityDefinition* Bash = UMMOAbilityDefinition::FindById(TEXT("ShoulderBash"));
+			UMMOAbilityDefinition* Cleave = UMMOAbilityDefinition::FindById(TEXT("CleavingArc"));
+			Check(Abilities->GetAllAbilities().Num() == 4 && Rend && Bash && Cleave, TEXT("Four abilities are defined"));
+			if (!Rend || !Bash || !Cleave)
+			{
+				Finish();
+				return false;
+			}
+
+			const int32 Level = Progression->GetLevel();
+			int32 Expected = 0;
+			bool bAllOnBar = true;
+			for (const UMMOAbilityDefinition* Ability : Abilities->GetAllAbilities())
+			{
+				if (Ability->RequiredLevel <= Level)
+				{
+					++Expected;
+					bAllOnBar &= Player->GetActionBar()->FindSlot(UMMOActionBarComponent::MakeAbility(Ability->AbilityId)) != INDEX_NONE;
+				}
+			}
+			Check(Abilities->GetKnown().Num() == Expected && Expected > 0, FString::Printf(TEXT("Level %d knows %d abilities"), Level, Expected));
+			Check(bAllOnBar, TEXT("Abilities learned while levelling went onto the hotbar"));
+
+			while (Progression->GetLevel() < 5)
+			{
+				Progression->AddXP(Progression->GetXPToNextLevel() - Progression->GetCurrentXP());
+			}
+			Check(Abilities->IsKnown(Cleave) && Player->GetActionBar()->FindSlot(UMMOActionBarComponent::MakeAbility(Cleave->AbilityId)) != INDEX_NONE,
+				TEXT("Reaching level 5 teaches Cleaving Arc and puts it on the hotbar"));
+
+			// two wolves to practise on: the closest idle pair, so neither is pulled past its leash
+			TArray<AMMOCreature*> Idle;
+			for (TActorIterator<AMMOCreature> It(World); It; ++It)
+			{
+				if (!It->IsDead() && It->IsTargetable() && It->GetClass() != AMMODireWolf::StaticClass() && StateOf(*It) == EMMOCreatureAIState::Idle)
+				{
+					Idle.Add(*It);
+				}
+			}
+			AMMOCreature* A = nullptr;
+			AMMOCreature* B = nullptr;
+			float BestPair = TNumericLimits<float>::Max();
+			for (int32 i = 0; i < Idle.Num(); ++i)
+			{
+				for (int32 j = i + 1; j < Idle.Num(); ++j)
+				{
+					const float D = FVector::Dist2D(Idle[i]->GetActorLocation(), Idle[j]->GetActorLocation());
+					if (D < BestPair)
+					{
+						BestPair = D;
+						A = Idle[i];
+						B = Idle[j];
+					}
+				}
+			}
+			Check(A && B, TEXT("Two idle wolves to test abilities on"));
+			if (!A || !B)
+			{
+				Finish();
+				return false;
+			}
+			State->AbilityTarget = A;
+			State->AbilityBystander = B;
+
+			PlacePlayerNear(A->GetActorLocation(), 900.0f);
+			Combat->SetTarget(A);
+			Check(Abilities->UseAbility(Rend) == EMMOAbilityResult::OutOfRange, TEXT("Melee abilities need the target in reach"));
+
+			PlacePlayerNear(A->GetActorLocation(), 120.0f);
+			B->SetActorLocation(A->GetActorLocation() + Player->GetActorRightVector() * 110.0f, false, nullptr, ETeleportType::TeleportPhysics);
+			Player->FaceActor(A);
+			State->HealthMark = A->GetHealth()->GetCurrentHealth();
+			Check(Abilities->UseAbility(Rend) == EMMOAbilityResult::Success && A->GetHealth()->GetCurrentHealth() < State->HealthMark, TEXT("Rending Strike hits the target"));
+			Check(A->IsBleeding(), TEXT("Rending Strike makes the target bleed"));
+			float Remaining = 0.0f, Duration = 0.0f;
+			Abilities->GetCooldown(Rend, Remaining, Duration);
+			Check(Remaining > Rend->Cooldown - 1.0f, TEXT("Rending Strike goes on cooldown"));
+			Check(Abilities->UseAbility(Bash) == EMMOAbilityResult::NotReady, TEXT("The global cooldown blocks a second ability right away"));
+			Check(Combat->IsAutoAttacking(), TEXT("Attack abilities start auto-attack"));
+			Combat->StopAutoAttack();
+			NextStep();
+			break;
+		}
+
+		case 42:
+			if (Elapsed() > Player->GetAbilities()->GlobalCooldown + 0.1f)
+			{
+				AMMOCreature* A = State->AbilityTarget.Get();
+				Combat->StopAutoAttack();
+				Check(A && Player->GetAbilities()->UseAbility(UMMOAbilityDefinition::FindById(TEXT("ShoulderBash"))) == EMMOAbilityResult::Success && A->IsStunned(),
+					TEXT("After the global cooldown, Shoulder Bash stuns the target"));
+				Combat->StopAutoAttack();
+				State->Mark = A ? A->GetLastAttackTime() : 0.0;
+				State->HealthMark = A ? A->GetHealth()->GetCurrentHealth() : 0.0f;
+				NextStep();
+			}
+			break;
+
+		case 43:
+			if (Elapsed() > 1.6f)
+			{
+				AMMOCreature* A = State->AbilityTarget.Get();
+				AMMOCreature* B = State->AbilityBystander.Get();
+				Check(A && A->GetLastAttackTime() == State->Mark && A->IsStunned(), TEXT("A stunned wolf doesn't attack"));
+				Check(A && A->GetHealth()->GetCurrentHealth() < State->HealthMark, TEXT("Bleed keeps damaging the target over time"));
+				const float AHealth = A ? A->GetHealth()->GetCurrentHealth() : 0.0f;
+				const float BHealth = B ? B->GetHealth()->GetCurrentHealth() : 0.0f;
+				Player->FaceActor(A);
+				Check(Player->GetAbilities()->UseAbility(UMMOAbilityDefinition::FindById(TEXT("CleavingArc"))) == EMMOAbilityResult::Success, TEXT("Cleaving Arc swings"));
+				Check(A && B && A->GetHealth()->GetCurrentHealth() < AHealth && B->GetHealth()->GetCurrentHealth() < BHealth, TEXT("Cleaving Arc hits both wolves in front"));
+				for (AMMOCreature* Wolf2 : { A, B })
+				{
+					if (Wolf2 && !Wolf2->IsDead())
+					{
+						Wolf2->GetHealth()->ApplyDamage(100000.0f, Player);
+					}
+				}
+				Combat->StopAutoAttack();
+				NextStep();
+			}
+			break;
+
+		case 44: // cast time: moving interrupts
+			if (Elapsed() > Player->GetAbilities()->GlobalCooldown + 0.1f)
+			{
+				UMMOAbilityDefinition* SecondWind = UMMOAbilityDefinition::FindById(TEXT("SecondWind"));
+				// stray wolves may still be biting; keep the heal measurement exact
+				PlayerHealth->SetInvulnerable(true);
+				PlayerHealth->RestoreHealth(PlayerHealth->GetMaxHealth() * 0.4f);
+				State->HealthMark = PlayerHealth->GetCurrentHealth();
+				FText CastName;
+				float Progress = 0.0f;
+				Check(SecondWind && Player->GetAbilities()->UseAbility(SecondWind) == EMMOAbilityResult::CastStarted && Player->GetActiveCast(CastName, Progress),
+					TEXT("Second Wind starts a cast"));
+				Player->SetActorLocation(Player->GetActorLocation() + Player->GetActorForwardVector() * 100.0f, false, nullptr, ETeleportType::TeleportPhysics);
+				NextStep();
+			}
+			break;
+
+		case 45:
+			if (Elapsed() > 0.2f)
+			{
+				UMMOAbilityDefinition* SecondWind = UMMOAbilityDefinition::FindById(TEXT("SecondWind"));
+				float Remaining = 0.0f, Duration = 0.0f;
+				Player->GetAbilities()->GetCooldown(SecondWind, Remaining, Duration);
+				Check(!Player->GetAbilities()->IsCasting() && FMath::IsNearlyEqual(PlayerHealth->GetCurrentHealth(), State->HealthMark, 1.0f) && Remaining <= 0.0f,
+					TEXT("Moving interrupts the cast: no heal and no cooldown spent"));
+				Check(Player->GetAbilities()->UseAbility(SecondWind) == EMMOAbilityResult::CastStarted, TEXT("Second Wind can be cast again right away"));
+				HUDOf(Player)->ToggleAbilities();
+				Check(HUDOf(Player)->GetHUDWidget()->IsAbilitiesOpen(), TEXT("K opens the abilities window"));
+				State->bFlag = false;
+				NextStep();
+			}
+			break;
+
+		case 46:
+			if (!State->bFlag && Elapsed() > 0.7f)
+			{
+				Shot(TEXT("12_Abilities"));
+				State->bFlag = true;
+			}
+			else if (State->bFlag && Elapsed() > 1.8f)
+			{
+				UMMOAbilityDefinition* SecondWind = UMMOAbilityDefinition::FindById(TEXT("SecondWind"));
+				const float Expected = FMath::Min(PlayerHealth->GetMaxHealth(), State->HealthMark + PlayerHealth->GetMaxHealth() * SecondWind->SelfHealFraction);
+				Check(!Player->GetAbilities()->IsCasting() && FMath::IsNearlyEqual(PlayerHealth->GetCurrentHealth(), Expected, 5.0f),
+					FString::Printf(TEXT("Standing still, Second Wind finishes and heals 30%% (%.0f -> %.0f)"), State->HealthMark, PlayerHealth->GetCurrentHealth()));
+				float Remaining = 0.0f, Duration = 0.0f;
+				Player->GetAbilities()->GetCooldown(SecondWind, Remaining, Duration);
+				Check(Remaining > SecondWind->Cooldown - 3.0f, TEXT("Second Wind goes on its cooldown"));
+				HUDOf(Player)->CloseAllWindows();
+				PlayerHealth->SetInvulnerable(false);
+				State->bFlag = false;
+				NextStep();
+			}
+			break;
+
+		case 47: // save, scramble everything, load: the character comes back exactly as it was (Milestone 5)
 		{
 			UMMOSaveSubsystem* Saves = World->GetGameInstance()->GetSubsystem<UMMOSaveSubsystem>();
 			Check(Saves && !Saves->IsPersistenceEnabled(), TEXT("Autosave is off during the self-test (real progress is never overwritten)"));

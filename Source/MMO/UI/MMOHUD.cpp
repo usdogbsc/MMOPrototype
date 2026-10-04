@@ -99,6 +99,17 @@ void AMMOHUD::ToggleQuestLog()
 	}
 }
 
+void AMMOHUD::ToggleAbilities()
+{
+	if (HUDWidget)
+	{
+		const bool bOpen = !HUDWidget->IsAbilitiesOpen();
+		HUDWidget->SetAbilitiesOpen(bOpen);
+		PlayUISound(bOpen ? LoadedWindowOpenSound : LoadedWindowCloseSound);
+		UpdateInputMode();
+	}
+}
+
 void AMMOHUD::OpenDialogue(AMMONPC* NPC)
 {
 	if (HUDWidget && NPC)
@@ -208,6 +219,7 @@ bool AMMOHUD::CloseAllWindows()
 	HUDWidget->CloseDialogue();
 	HUDWidget->CloseVendor();
 	HUDWidget->SetQuestLogOpen(false);
+	HUDWidget->SetAbilitiesOpen(false);
 	PlayUISound(LoadedWindowCloseSound);
 	UpdateInputMode();
 	return true;
@@ -215,7 +227,7 @@ bool AMMOHUD::CloseAllWindows()
 
 bool AMMOHUD::IsAnyWindowOpen() const
 {
-	return HUDWidget && (HUDWidget->IsInventoryOpen() || HUDWidget->IsCharacterOpen() || HUDWidget->IsLootOpen() || HUDWidget->IsDialogueOpen() || HUDWidget->IsQuestLogOpen() || HUDWidget->IsVendorOpen());
+	return HUDWidget && (HUDWidget->IsInventoryOpen() || HUDWidget->IsCharacterOpen() || HUDWidget->IsLootOpen() || HUDWidget->IsDialogueOpen() || HUDWidget->IsQuestLogOpen() || HUDWidget->IsVendorOpen() || HUDWidget->IsAbilitiesOpen());
 }
 
 void AMMOHUD::HandleWindowClosed()

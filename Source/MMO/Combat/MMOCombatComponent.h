@@ -174,6 +174,9 @@ public:
 	UFUNCTION(BlueprintCallable, Category="Combat")
 	void StopAutoAttack();
 
+	/** Plays the swing animation for an ability (no damage of its own) */
+	void PlayAbilityAnimation(float PlayRate = 1.4f);
+
 	/** Called on the swing animation's hit frame */
 	void NotifyMeleeHitFrame();
 

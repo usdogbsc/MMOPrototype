@@ -8,6 +8,11 @@
 #include "UI/MMOQuestWidgets.h"
 #include "UI/MMOVendorWindowWidget.h"
 #include "UI/MMOActionSlotWidget.h"
+#include "UI/MMOAbilityWidgets.h"
+#include "Combat/MMOAbilityComponent.h"
+#include "Combat/MMOAbilityDefinition.h"
+#include "Components/ProgressBar.h"
+#include "Components/SizeBox.h"
 #include "Components/HorizontalBox.h"
 #include "Components/HorizontalBoxSlot.h"
 #include "Quests/MMOQuestDefinition.h"
@@ -102,7 +107,7 @@ void UMMOHUDWidget::BuildDefaultLayout()
 	TargetFrame = WidgetTree->ConstructWidget<UMMOUnitFrameWidget>(FrameClass, TEXT("TargetFrame"));
 	Place(Root, TargetFrame, FAnchors(0.0f, 0.0f), FVector2D::ZeroVector, FVector2D(330.0f, 24.0f));
 
-	UTextBlock* HelpText = MakeText(WidgetTree, TEXT("Left-click: select    Right-click: attack / loot    Hold a mouse button + drag: camera    1: auto attack    F: talk / loot    Tab: next target    B: backpack    C: character    L: quest log    Esc: close / clear"), 11, Colors::TextDim);
+	UTextBlock* HelpText = MakeText(WidgetTree, TEXT("Left-click: select    Right-click: attack / loot    Hold a mouse button + drag: camera    1: auto attack    F: talk / loot    Tab: next target    B: backpack    C: character    K: abilities    L: quest log    2-9: hotbar    Esc: close / clear"), 11, Colors::TextDim);
 	Place(Root, HelpText, FAnchors(0.0f, 0.0f), FVector2D::ZeroVector, FVector2D(26.0f, 122.0f));
 
 	// hotbar, bottom-center
@@ -119,6 +124,22 @@ void UMMOHUDWidget::BuildDefaultLayout()
 		ActionSlots.Add(ActionSlot);
 	}
 	Place(Root, ActionBarRow, FAnchors(0.5f, 1.0f), FVector2D(0.5f, 1.0f), FVector2D(0.0f, -28.0f));
+
+	// cast bar: ability (and later gathering) progress, just above the hotbar
+	{
+		UVerticalBox* CastBox = WidgetTree->ConstructWidget<UVerticalBox>(UVerticalBox::StaticClass(), TEXT("CastBar"));
+		CastBarText = MakeText(WidgetTree, TEXT(""), 13, FLinearColor::White, true, ETextJustify::Center);
+		CastBox->AddChildToVerticalBox(CastBarText)->SetHorizontalAlignment(HAlign_Center);
+		USizeBox* BarSize = WidgetTree->ConstructWidget<USizeBox>(USizeBox::StaticClass());
+		BarSize->SetWidthOverride(260.0f);
+		BarSize->SetHeightOverride(14.0f);
+		CastBarFill = MakeBar(WidgetTree, FLinearColor(0.95f, 0.75f, 0.2f), Colors::BarBack);
+		BarSize->AddChild(CastBarFill);
+		CastBox->AddChildToVerticalBox(BarSize)->SetHorizontalAlignment(HAlign_Center);
+		CastBox->SetVisibility(ESlateVisibility::Collapsed);
+		CastBar = CastBox;
+		Place(Root, CastBox, FAnchors(0.5f, 1.0f), FVector2D(0.5f, 1.0f), FVector2D(0.0f, -150.0f));
+	}
 
 	StatusText = MakeText(WidgetTree, TEXT(""), 12, FLinearColor(0.55f, 0.9f, 0.45f), true);
 	Place(Root, StatusText, FAnchors(0.0f, 0.0f), FVector2D::ZeroVector, FVector2D(26.0f, 102.0f));
@@ -206,13 +227,16 @@ void UMMOHUDWidget::BuildDefaultLayout()
 	DialogueWindow = WidgetTree->ConstructWidget<UMMODialogueWindowWidget>(UMMODialogueWindowWidget::StaticClass(), TEXT("DialogueWindow"));
 	Place(Root, DialogueWindow, FAnchors(0.0f, 0.5f), FVector2D(0.0f, 0.5f), FVector2D(24.0f, 20.0f));
 
+	AbilitiesWindow = WidgetTree->ConstructWidget<UMMOAbilitiesWindowWidget>(UMMOAbilitiesWindowWidget::StaticClass(), TEXT("AbilitiesWindow"));
+	Place(Root, AbilitiesWindow, FAnchors(0.0f, 0.5f), FVector2D(0.0f, 0.5f), FVector2D(340.0f, 0.0f));
+
 	VendorWindow = WidgetTree->ConstructWidget<UMMOVendorWindowWidget>(UMMOVendorWindowWidget::StaticClass(), TEXT("VendorWindow"));
 	Place(Root, VendorWindow, FAnchors(0.0f, 0.5f), FVector2D(0.0f, 0.5f), FVector2D(24.0f, 20.0f));
 
 	QuestLogWindow = WidgetTree->ConstructWidget<UMMOQuestLogWindowWidget>(UMMOQuestLogWindowWidget::StaticClass(), TEXT("QuestLogWindow"));
 	Place(Root, QuestLogWindow, FAnchors(0.5f, 0.5f), FVector2D(0.5f, 0.5f), FVector2D(0.0f, 0.0f));
 
-	for (UWidget* Window : { static_cast<UWidget*>(CharacterWindow), static_cast<UWidget*>(InventoryWindow), static_cast<UWidget*>(LootWindow), static_cast<UWidget*>(DialogueWindow), static_cast<UWidget*>(QuestLogWindow), static_cast<UWidget*>(VendorWindow) })
+	for (UWidget* Window : { static_cast<UWidget*>(CharacterWindow), static_cast<UWidget*>(InventoryWindow), static_cast<UWidget*>(LootWindow), static_cast<UWidget*>(DialogueWindow), static_cast<UWidget*>(QuestLogWindow), static_cast<UWidget*>(VendorWindow), static_cast<UWidget*>(AbilitiesWindow) })
 	{
 		Window->SetVisibility(ESlateVisibility::Collapsed);
 	}
@@ -260,6 +284,10 @@ void UMMOHUDWidget::NativeConstruct()
 	{
 		VendorWindow->OnCloseRequested.BindLambda([this]() { CloseWindowFromWidget(VendorWindow); });
 	}
+	if (AbilitiesWindow)
+	{
+		AbilitiesWindow->OnCloseRequested.BindLambda([this]() { CloseWindowFromWidget(AbilitiesWindow); });
+	}
 }
 
 void UMMOHUDWidget::NativeDestruct()
@@ -278,6 +306,7 @@ void UMMOHUDWidget::NativeTick(const FGeometry& MyGeometry, float InDeltaTime)
 	AMMOCharacter* Character = BoundCharacter.Get();
 
 	UpdateFrames(Character);
+	UpdateCastBar(Character);
 	UpdateFloatingTexts(InDeltaTime);
 	UpdateBanners(Character, InDeltaTime);
 	UpdateLootFeed(InDeltaTime);
@@ -408,6 +437,60 @@ bool UMMOHUDWidget::IsVendorOpen() const
 AMMONPC* UMMOHUDWidget::GetOpenVendor() const
 {
 	return IsVendorOpen() ? VendorWindow->GetVendor() : nullptr;
+}
+
+void UMMOHUDWidget::SetAbilitiesOpen(bool bOpen)
+{
+	if (AbilitiesWindow)
+	{
+		if (bOpen)
+		{
+			AbilitiesWindow->Init(BoundCharacter.Get());
+		}
+		AbilitiesWindow->SetVisibility(bOpen ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
+	}
+}
+
+bool UMMOHUDWidget::IsAbilitiesOpen() const
+{
+	return AbilitiesWindow && AbilitiesWindow->GetVisibility() == ESlateVisibility::Visible;
+}
+
+bool UMMOHUDWidget::IsCastBarVisible() const
+{
+	return CastBar && CastBar->GetVisibility() != ESlateVisibility::Collapsed;
+}
+
+void UMMOHUDWidget::UpdateCastBar(AMMOCharacter* Character)
+{
+	if (!CastBar || !CastBarFill || !CastBarText)
+	{
+		return;
+	}
+	FText Name;
+	float Progress = 0.0f;
+	if (Character && Character->GetActiveCast(Name, Progress))
+	{
+		CastBarText->SetText(Name);
+		CastBarFill->SetPercent(Progress);
+		CastBar->SetVisibility(ESlateVisibility::HitTestInvisible);
+	}
+	else
+	{
+		CastBar->SetVisibility(ESlateVisibility::Collapsed);
+	}
+}
+
+void UMMOHUDWidget::HandleAbilityLearned(UMMOAbilityDefinition* Ability)
+{
+	if (Ability)
+	{
+		HandleQuestMessage(FText::Format(NSLOCTEXT("MMOHUD", "Learned", "New ability learned: {0}"), Ability->DisplayName), true);
+	}
+	if (IsAbilitiesOpen())
+	{
+		AbilitiesWindow->Refresh();
+	}
 }
 
 void UMMOHUDWidget::SetQuestLogOpen(bool bOpen)
@@ -681,6 +764,7 @@ void UMMOHUDWidget::BindToCharacter(AMMOCharacter* Character)
 	Character->OnPlayerMessage.AddDynamic(this, &UMMOHUDWidget::HandleCombatError);
 	Character->GetExploration()->OnZoneChanged.AddDynamic(this, &UMMOHUDWidget::HandleZoneChanged);
 	Character->GetExploration()->OnLocationDiscovered.AddDynamic(this, &UMMOHUDWidget::HandleLocationDiscovered);
+	Character->GetAbilities()->OnAbilityLearned.AddDynamic(this, &UMMOHUDWidget::HandleAbilityLearned);
 	Character->GetQuestLog()->OnQuestLogChanged.AddDynamic(this, &UMMOHUDWidget::HandleQuestLogChanged);
 	Character->GetQuestLog()->OnQuestMessage.AddDynamic(this, &UMMOHUDWidget::HandleQuestMessage);
 	RebuildTracker();
@@ -717,6 +801,7 @@ void UMMOHUDWidget::UnbindFromCharacter()
 		Character->OnPlayerMessage.RemoveAll(this);
 		Character->GetExploration()->OnZoneChanged.RemoveAll(this);
 		Character->GetExploration()->OnLocationDiscovered.RemoveAll(this);
+		Character->GetAbilities()->OnAbilityLearned.RemoveAll(this);
 		Character->GetQuestLog()->OnQuestLogChanged.RemoveAll(this);
 		Character->GetQuestLog()->OnQuestMessage.RemoveAll(this);
 	}

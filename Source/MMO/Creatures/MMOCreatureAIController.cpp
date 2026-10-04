@@ -25,6 +25,13 @@ void AMMOCreatureAIController::Tick(float DeltaSeconds)
 		return;
 	}
 
+	// stunned: stand still and do nothing until it wears off
+	if (Creature->IsStunned())
+	{
+		StopMoving();
+		return;
+	}
+
 	switch (State)
 	{
 	case EMMOCreatureAIState::Idle:			TickIdle(Creature); break;

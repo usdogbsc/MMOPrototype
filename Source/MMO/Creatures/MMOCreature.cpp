@@ -259,9 +259,44 @@ void AMMOCreature::Tick(float DeltaSeconds)
 	UpdateLootMarker();
 }
 
+void AMMOCreature::ApplyBleed(float TotalDamage, float Duration, AActor* DamageInstigator)
+{
+	static constexpr float TickInterval = 1.5f;
+	BleedTicksLeft = FMath::Max(1, FMath::RoundToInt(Duration / TickInterval));
+	BleedPerTick = TotalDamage / BleedTicksLeft;
+	BleedInstigator = DamageInstigator;
+	GetWorldTimerManager().SetTimer(BleedTimer, this, &AMMOCreature::TickBleed, TickInterval, true);
+}
+
+void AMMOCreature::TickBleed()
+{
+	if (bIsDead || BleedTicksLeft <= 0)
+	{
+		BleedTicksLeft = 0;
+		GetWorldTimerManager().ClearTimer(BleedTimer);
+		return;
+	}
+	--BleedTicksLeft;
+	Health->ApplyDamage(BleedPerTick, BleedInstigator.Get());
+	if (BleedTicksLeft <= 0)
+	{
+		GetWorldTimerManager().ClearTimer(BleedTimer);
+	}
+}
+
+void AMMOCreature::ApplyStun(float Duration)
+{
+	StunEndTime = FMath::Max(StunEndTime, GetWorld()->GetTimeSeconds() + Duration);
+}
+
+bool AMMOCreature::IsStunned() const
+{
+	return !bIsDead && GetWorld() && GetWorld()->GetTimeSeconds() < StunEndTime;
+}
+
 bool AMMOCreature::CanAttack(const AActor* Target) const
 {
-	if (bIsDead || !Target || IsAttacking())
+	if (bIsDead || !Target || IsAttacking() || IsStunned())
 	{
 		return false;
 	}
@@ -382,6 +417,9 @@ void AMMOCreature::HandleDeath(AActor* Killer)
 	}
 
 	bIsDead = true;
+	BleedTicksLeft = 0;
+	StunEndTime = 0.0;
+	GetWorldTimerManager().ClearTimer(BleedTimer);
 	bAttackPending = false;
 	PendingAttackTarget.Reset();
 	GetWorldTimerManager().ClearTimer(AttackResolveTimer);

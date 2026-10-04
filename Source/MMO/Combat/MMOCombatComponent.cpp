@@ -274,6 +274,16 @@ void UMMOCombatComponent::BeginSwing()
 	OnSwingStarted.Broadcast(CurrentTarget);
 }
 
+void UMMOCombatComponent::PlayAbilityAnimation(float PlayRate)
+{
+	const ACharacter* Character = Cast<ACharacter>(GetOwner());
+	UAnimInstance* AnimInstance = Character && Character->GetMesh() ? Character->GetMesh()->GetAnimInstance() : nullptr;
+	if (AnimInstance && LoadedSwingAnimation && !bSwingPending)
+	{
+		AnimInstance->PlaySlotAnimationAsDynamicMontage(LoadedSwingAnimation, SwingSlotName, 0.05f, 0.2f, PlayRate);
+	}
+}
+
 void UMMOCombatComponent::NotifyMeleeHitFrame()
 {
 	if (bSwingPending)

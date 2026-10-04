@@ -28,6 +28,9 @@
 #include "Quests/MMOQuestLogComponent.h"
 #include "Combat/MMOCooldownComponent.h"
 #include "Items/MMOActionBarComponent.h"
+#include "Combat/MMOAbilityComponent.h"
+#include "Combat/MMOAbilityDefinition.h"
+#include "UI/MMOHUDWidget.h"
 #include "NPC/MMONPC.h"
 #include "Save/MMOSaveSubsystem.h"
 #include "Engine/GameInstance.h"
@@ -57,6 +60,8 @@ namespace MMOCharacterSounds
 	static const FName Error(TEXT("Error"));
 	static const FName Drink(TEXT("Drink"));
 	static const FName Eat(TEXT("Eat"));
+	static const FName Ability(TEXT("Ability"));
+	static const FName HealSpell(TEXT("Heal"));
 
 	static TSoftObjectPtr<USoundBase> Default(const TCHAR* AssetName)
 	{
@@ -113,6 +118,7 @@ AMMOCharacter::AMMOCharacter()
 	QuestLog = CreateDefaultSubobject<UMMOQuestLogComponent>(TEXT("QuestLog"));
 	Cooldowns = CreateDefaultSubobject<UMMOCooldownComponent>(TEXT("Cooldowns"));
 	ActionBar = CreateDefaultSubobject<UMMOActionBarComponent>(TEXT("ActionBar"));
+	Abilities = CreateDefaultSubobject<UMMOAbilityComponent>(TEXT("Abilities"));
 
 	MainHandMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("MainHandMesh"));
 	MainHandMesh->SetupAttachment(GetMesh(), MainHandSocket);
@@ -134,6 +140,8 @@ AMMOCharacter::AMMOCharacter()
 	ErrorSound = MMOCharacterSounds::Default(TEXT("S_MMO_Error"));
 	DrinkSound = MMOCharacterSounds::Default(TEXT("S_MMO_Drink"));
 	EatSound = MMOCharacterSounds::Default(TEXT("S_MMO_Eat"));
+	AbilitySound = MMOCharacterSounds::Default(TEXT("S_MMO_AbilityHit"));
+	HealSound = MMOCharacterSounds::Default(TEXT("S_MMO_Heal"));
 	MeleeImpactEffect = TSoftObjectPtr<UNiagaraSystem>(FSoftObjectPath(TEXT("/Game/Variant_Combat/VFX/NS_Damage.NS_Damage")));
 	MeleeImpactCameraShake = TSoftClassPtr<UCameraShakeBase>(FSoftObjectPath(TEXT("/Game/Variant_Combat/Blueprints/BP_CameraShake_Hit_Enemy.BP_CameraShake_Hit_Enemy_C")));
 	HurtCameraShake = TSoftClassPtr<UCameraShakeBase>(FSoftObjectPath(TEXT("/Game/Variant_Combat/Blueprints/BP_CameraShake_Hit_Player.BP_CameraShake_Hit_Player_C")));
@@ -208,6 +216,12 @@ void AMMOCharacter::BeginPlay()
 	LoadedSounds.Add(MMOCharacterSounds::Error, ErrorSound.LoadSynchronous());
 	LoadedSounds.Add(MMOCharacterSounds::Drink, DrinkSound.LoadSynchronous());
 	LoadedSounds.Add(MMOCharacterSounds::Eat, EatSound.LoadSynchronous());
+	LoadedSounds.Add(MMOCharacterSounds::Ability, AbilitySound.LoadSynchronous());
+	LoadedSounds.Add(MMOCharacterSounds::HealSpell, HealSound.LoadSynchronous());
+
+	// abilities known at the starting level; later ones arrive with level ups
+	Abilities->RefreshKnown(Progression->GetLevel(), false);
+	Abilities->OnAbilityLearned.AddDynamic(this, &AMMOCharacter::HandleAbilityLearned);
 	LoadedMeleeImpactEffect = MeleeImpactEffect.LoadSynchronous();
 	LoadedMeleeImpactCameraShake = MeleeImpactCameraShake.LoadSynchronous();
 	LoadedHurtCameraShake = HurtCameraShake.LoadSynchronous();
@@ -252,6 +266,7 @@ void AMMOCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputCompon
 		EnhancedInputComponent->BindAction(InventoryAction, ETriggerEvent::Started, this, &AMMOCharacter::DoToggleInventory);
 		EnhancedInputComponent->BindAction(CharacterAction, ETriggerEvent::Started, this, &AMMOCharacter::DoToggleCharacter);
 		EnhancedInputComponent->BindAction(QuestLogAction, ETriggerEvent::Started, this, &AMMOCharacter::DoToggleQuestLog);
+		EnhancedInputComponent->BindAction(AbilitiesAction, ETriggerEvent::Started, this, &AMMOCharacter::DoToggleAbilities);
 		for (int32 Index = 0; Index < ActionSlotActions.Num(); ++Index)
 		{
 			EnhancedInputComponent->BindActionValueLambda(ActionSlotActions[Index], ETriggerEvent::Started, [this, Index](const FInputActionValue&) { UseActionSlot(Index); });
@@ -374,6 +389,7 @@ void AMMOCharacter::CreateDefaultCombatInput()
 	EnsureAction(InventoryAction, TEXT("IA_MMOInventory_Runtime"), EKeys::B, EInputActionValueType::Boolean, EKeys::I);
 	EnsureAction(CharacterAction, TEXT("IA_MMOCharacter_Runtime"), EKeys::C);
 	EnsureAction(QuestLogAction, TEXT("IA_MMOQuestLog_Runtime"), EKeys::L);
+	EnsureAction(AbilitiesAction, TEXT("IA_MMOAbilities_Runtime"), EKeys::K);
 
 	// hotbar keys 2-9
 	static const FKey SlotKeys[] = { EKeys::Two, EKeys::Three, EKeys::Four, EKeys::Five, EKeys::Six, EKeys::Seven, EKeys::Eight, EKeys::Nine };
@@ -999,6 +1015,7 @@ void AMMOCharacter::LoadSavedGame()
 
 void AMMOCharacter::RefreshAfterLoad(float SavedHealth)
 {
+	Abilities->RefreshKnown(Progression->GetLevel(), false);
 	RecalculateStats(false);
 	RefreshEquipmentVisuals();
 	Health->RestoreHealth(SavedHealth > 0.0f ? SavedHealth : Health->GetMaxHealth());
@@ -1051,7 +1068,7 @@ void AMMOCharacter::EndPlay(const EEndPlayReason::Type EndPlayReason)
 bool AMMOCharacter::IsInCombat() const
 {
 	const double Now = GetWorld()->GetTimeSeconds();
-	return Now - FMath::Max(LastDamageTakenTime, Combat->GetLastAttackTime()) < OutOfCombatDelay;
+	return Now - FMath::Max3(LastDamageTakenTime, Combat->GetLastAttackTime(), LastAbilityTime) < OutOfCombatDelay;
 }
 
 float AMMOCharacter::GetFoodRemaining() const
@@ -1112,6 +1129,11 @@ bool AMMOCharacter::UseActionSlot(int32 Index)
 	if (Action.Type == EMMOActionType::Item)
 	{
 		return UseItem(UMMOItemDefinition::FindById(Action.Id)) == EMMOUseItemResult::Success;
+	}
+	if (Action.Type == EMMOActionType::Ability)
+	{
+		const EMMOAbilityResult Result = Abilities->UseAbility(UMMOAbilityDefinition::FindById(Action.Id));
+		return Result == EMMOAbilityResult::Success || Result == EMMOAbilityResult::CastStarted;
 	}
 	return false;
 }
@@ -1244,6 +1266,79 @@ EMMOVendorResult AMMOCharacter::BuybackItem(int32 BuybackIndex)
 	return Result;
 }
 
+void AMMOCharacter::DoToggleAbilities()
+{
+	if (AMMOHUD* HUD = Cast<AMMOHUD>(Cast<APlayerController>(GetController()) ? Cast<APlayerController>(GetController())->GetHUD() : nullptr))
+	{
+		HUD->ToggleAbilities();
+	}
+}
+
+void AMMOCharacter::HandleAbilityLearned(UMMOAbilityDefinition* Ability)
+{
+	if (Ability)
+	{
+		ActionBar->AutoPlace(UMMOActionBarComponent::MakeAbility(Ability->AbilityId));
+		UE_LOG(LogMMO, Log, TEXT("Learned %s"), *Ability->DisplayName.ToString());
+	}
+}
+
+void AMMOCharacter::FaceActor(const AActor* Other)
+{
+	if (!Other)
+	{
+		return;
+	}
+	FVector To = Other->GetActorLocation() - GetActorLocation();
+	To.Z = 0.0f;
+	if (!To.IsNearlyZero())
+	{
+		SetActorRotation(To.Rotation());
+	}
+}
+
+void AMMOCharacter::ShowWorldText(const FVector& Location, const FString& Text, const FLinearColor& Color) const
+{
+	const APlayerController* PC = Cast<APlayerController>(GetController());
+	const AMMOHUD* HUD = PC ? Cast<AMMOHUD>(PC->GetHUD()) : nullptr;
+	if (HUD && HUD->GetHUDWidget())
+	{
+		HUD->GetHUDWidget()->AddFloatingText(Location, Text, Color, 20, 1.5f);
+	}
+}
+
+void AMMOCharacter::NotifyAbilityExecuted(UMMOAbilityDefinition* Ability, AActor* Target)
+{
+	LastAbilityTime = GetWorld()->GetTimeSeconds();
+	if (Ability->IsOffensive())
+	{
+		Combat->PlayAbilityAnimation();
+		PlayPresentationSound(MMOCharacterSounds::Ability);
+
+		// like most MMOs, an attack ability also starts auto-attack on the target
+		if (Target && Target == Combat->GetCurrentTarget() && !Combat->IsAutoAttacking())
+		{
+			Combat->StartAutoAttack();
+		}
+	}
+	if (Ability->SelfHealFraction > 0.0f)
+	{
+		PlayPresentationSound(MMOCharacterSounds::HealSpell);
+	}
+	UE_LOG(LogMMO, Log, TEXT("Used %s"), *Ability->DisplayName.ToString());
+}
+
+bool AMMOCharacter::GetActiveCast(FText& OutName, float& OutProgress) const
+{
+	if (const UMMOAbilityDefinition* Casting = Abilities->GetCastingAbility())
+	{
+		OutName = Casting->DisplayName;
+		OutProgress = Abilities->GetCastProgress();
+		return true;
+	}
+	return false;
+}
+
 void AMMOCharacter::DoToggleQuestLog()
 {
 	if (AMMOHUD* HUD = Cast<AMMOHUD>(Cast<APlayerController>(GetController()) ? Cast<APlayerController>(GetController())->GetHUD() : nullptr))
@@ -1256,6 +1351,7 @@ void AMMOCharacter::HandleLevelUp(int32 NewLevel)
 {
 	// levelling up fully heals: a classic, satisfying reward that also keeps the test loop moving
 	RecalculateStats(true);
+	Abilities->RefreshKnown(NewLevel, true);
 	PlayPresentationSound(MMOCharacterSounds::LevelUp);
 
 	float DamageMin, DamageMax;
@@ -1398,7 +1494,7 @@ void AMMOCharacter::TickRegeneration()
 		Health->Heal(FoodHealPerSecond * 0.5f);
 	}
 
-	const double LastCombat = FMath::Max(LastDamageTakenTime, Combat->GetLastAttackTime());
+	const double LastCombat = FMath::Max3(LastDamageTakenTime, Combat->GetLastAttackTime(), LastAbilityTime);
 	if (Now - LastCombat >= OutOfCombatDelay)
 	{
 		Health->Heal(OutOfCombatRegenPerSecond * 0.5f);

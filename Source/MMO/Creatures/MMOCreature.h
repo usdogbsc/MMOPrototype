@@ -254,6 +254,17 @@ protected:
 	FTimerHandle AttackResolveTimer;
 	FTimerHandle CorpseTimer;
 	FTimerHandle RespawnTimer;
+	FTimerHandle BleedTimer;
+
+	/** Bleed in progress */
+	float BleedPerTick = 0.0f;
+	int32 BleedTicksLeft = 0;
+	TWeakObjectPtr<AActor> BleedInstigator;
+
+	/** Stunned until this world time */
+	double StunEndTime = 0.0;
+
+	void TickBleed();
 
 public:
 
@@ -298,6 +309,14 @@ public:
 
 	/** World time the last attack started */
 	double GetLastAttackTime() const { return LastAttackTime; }
+
+	/** Bleeds for TotalDamage over Duration (ticks every 1.5s). A new bleed replaces the old one */
+	void ApplyBleed(float TotalDamage, float Duration, AActor* DamageInstigator);
+	bool IsBleeding() const { return BleedTicksLeft > 0; }
+
+	/** Can't move or attack for Duration */
+	void ApplyStun(float Duration);
+	bool IsStunned() const;
 
 	/** True when a skeletal mesh is assigned (the procedural body is hidden) */
 	bool UsesSkeletalMesh() const;

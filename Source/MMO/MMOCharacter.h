@@ -29,6 +29,8 @@ class UMMOExplorationComponent;
 class UMMOQuestLogComponent;
 class UMMOCooldownComponent;
 class UMMOActionBarComponent;
+class UMMOAbilityComponent;
+class UMMOAbilityDefinition;
 class AMMONPC;
 class UStaticMeshComponent;
 class AMMOCreature;
@@ -96,6 +98,10 @@ class AMMOCharacter : public ACharacter, public IMMOMeleeAttacker
 	/** Item (and later ability) cooldowns */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Components", meta = (AllowPrivateAccess = "true"))
 	TObjectPtr<UMMOCooldownComponent> Cooldowns;
+
+	/** Known abilities, casting and their effects */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Components", meta = (AllowPrivateAccess = "true"))
+	TObjectPtr<UMMOAbilityComponent> Abilities;
 
 	/** Hotbar keys 2-9 */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Components", meta = (AllowPrivateAccess = "true"))
@@ -167,6 +173,10 @@ protected:
 	UPROPERTY(EditAnywhere, Category="Input|Items")
 	TObjectPtr<UInputAction> QuestLogAction;
 
+	/** Toggle the abilities window. If unset, a runtime action bound to K is created */
+	UPROPERTY(EditAnywhere, Category="Input|Items")
+	TObjectPtr<UInputAction> AbilitiesAction;
+
 	/** Hotbar slot keys 2-9. Created at runtime */
 	UPROPERTY(Transient)
 	TArray<TObjectPtr<UInputAction>> ActionSlotActions;
@@ -199,6 +209,12 @@ protected:
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Items|Audio")
 	TSoftObjectPtr<USoundBase> EatSound;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Combat|Audio")
+	TSoftObjectPtr<USoundBase> AbilitySound;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Combat|Audio")
+	TSoftObjectPtr<USoundBase> HealSound;
 
 	/** Mapping context for the combat actions. If unset, one is created at runtime with the default keys */
 	UPROPERTY(EditAnywhere, Category="Input|Combat")
@@ -335,6 +351,9 @@ protected:
 	FTimerHandle RespawnTimer;
 	FTimerHandle SaveTimer;
 
+	/** World time an ability last went off (counts as combat) */
+	double LastAbilityTime = -1000.0;
+
 	/** Food heal-over-time in progress */
 	float FoodHealPerSecond = 0.0f;
 	double FoodEndTime = 0.0;
@@ -417,6 +436,9 @@ protected:
 
 	UFUNCTION()
 	void HandleLevelUpForSave(int32 NewLevel);
+
+	UFUNCTION()
+	void HandleAbilityLearned(UMMOAbilityDefinition* Ability);
 
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
@@ -531,6 +553,21 @@ public:
 	UFUNCTION(BlueprintCallable, Category="Input")
 	virtual void DoToggleQuestLog();
 
+	UFUNCTION(BlueprintCallable, Category="Input")
+	virtual void DoToggleAbilities();
+
+	/** Called by the ability component when an ability goes off: animation, sound, combat state */
+	void NotifyAbilityExecuted(UMMOAbilityDefinition* Ability, AActor* Target);
+
+	/** Turns to face Other (abilities) */
+	void FaceActor(const AActor* Other);
+
+	/** Floating text at a world location, e.g. "Stunned" */
+	void ShowWorldText(const FVector& Location, const FString& Text, const FLinearColor& Color) const;
+
+	/** What the cast bar shows: true while casting */
+	bool GetActiveCast(FText& OutName, float& OutProgress) const;
+
 	/** Uses hotbar slot 0-7 (keys 2-9). Returns true if something happened */
 	bool UseActionSlot(int32 Index);
 
@@ -618,5 +655,7 @@ public:
 	FORCEINLINE UMMOCooldownComponent* GetCooldowns() const { return Cooldowns; }
 
 	FORCEINLINE UMMOActionBarComponent* GetActionBar() const { return ActionBar; }
+
+	FORCEINLINE UMMOAbilityComponent* GetAbilities() const { return Abilities; }
 };
 

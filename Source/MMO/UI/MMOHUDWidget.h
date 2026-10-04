@@ -27,6 +27,9 @@ class UMMOQuestLogWindowWidget;
 class UMMOVendorWindowWidget;
 class UMMOActionSlotWidget;
 class UHorizontalBox;
+class UMMOAbilitiesWindowWidget;
+class UMMOAbilityDefinition;
+class UProgressBar;
 
 /**
  *  Root MMO HUD: player frame, target frame, Basic Attack hotbar slot, floating combat text, banners and screen flashes.
@@ -71,6 +74,13 @@ public:
 
 	/** Hotbar buttons for keys 2-9 */
 	const TArray<TObjectPtr<UMMOActionSlotWidget>>& GetActionSlots() const { return ActionSlots; }
+
+	void SetAbilitiesOpen(bool bOpen);
+	bool IsAbilitiesOpen() const;
+	UMMOAbilitiesWindowWidget* GetAbilitiesWindow() const { return AbilitiesWindow; }
+
+	/** True while the cast bar is showing */
+	bool IsCastBarVisible() const;
 
 	void SetQuestLogOpen(bool bOpen);
 	bool IsQuestLogOpen() const;
@@ -159,6 +169,19 @@ protected:
 
 	UPROPERTY(BlueprintReadOnly, Category="HUD", meta=(BindWidgetOptional))
 	TObjectPtr<UMMOVendorWindowWidget> VendorWindow;
+
+	UPROPERTY(BlueprintReadOnly, Category="HUD", meta=(BindWidgetOptional))
+	TObjectPtr<UMMOAbilitiesWindowWidget> AbilitiesWindow;
+
+	/** Cast bar above the hotbar */
+	UPROPERTY(BlueprintReadOnly, Category="HUD", meta=(BindWidgetOptional))
+	TObjectPtr<UWidget> CastBar;
+
+	UPROPERTY(BlueprintReadOnly, Category="HUD", meta=(BindWidgetOptional))
+	TObjectPtr<UProgressBar> CastBarFill;
+
+	UPROPERTY(BlueprintReadOnly, Category="HUD", meta=(BindWidgetOptional))
+	TObjectPtr<UTextBlock> CastBarText;
 
 	/** Row holding Basic Attack and the item/ability buttons */
 	UPROPERTY(BlueprintReadOnly, Category="HUD", meta=(BindWidgetOptional))
@@ -265,6 +288,11 @@ protected:
 
 	UFUNCTION()
 	void HandleLocationDiscovered(AMMODiscoveryZone* Zone, int32 XPAwarded);
+
+	UFUNCTION()
+	void HandleAbilityLearned(UMMOAbilityDefinition* Ability);
+
+	void UpdateCastBar(AMMOCharacter* Character);
 
 	UFUNCTION()
 	void HandleQuestLogChanged();
