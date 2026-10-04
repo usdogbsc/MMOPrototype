@@ -7,6 +7,8 @@
 #include "MMOHUD.generated.h"
 
 class UMMOHUDWidget;
+class UMMOLootContainerComponent;
+class USoundBase;
 
 /**
  *  Owns the UMG MMO HUD for the local player.
@@ -21,6 +23,16 @@ public:
 
 	UMMOHUDWidget* GetHUDWidget() const { return HUDWidget; }
 
+	void ToggleInventory();
+	void ToggleCharacter();
+	void OpenLoot(UMMOLootContainerComponent* Container);
+	void CloseLoot();
+
+	/** Closes every open window. Returns true if anything was open */
+	bool CloseAllWindows();
+
+	bool IsAnyWindowOpen() const;
+
 protected:
 
 	/** HUD widget class to create. Defaults to the C++ layout */
@@ -30,6 +42,32 @@ protected:
 	UPROPERTY(Transient)
 	TObjectPtr<UMMOHUDWidget> HUDWidget;
 
+	UPROPERTY(EditAnywhere, Category="HUD|Audio")
+	TSoftObjectPtr<USoundBase> WindowOpenSound;
+
+	UPROPERTY(EditAnywhere, Category="HUD|Audio")
+	TSoftObjectPtr<USoundBase> WindowCloseSound;
+
+	UPROPERTY(Transient)
+	TObjectPtr<USoundBase> LoadedWindowOpenSound;
+
+	UPROPERTY(Transient)
+	TObjectPtr<USoundBase> LoadedWindowCloseSound;
+
+	/** Shows the mouse cursor while any window is open, and gives the camera back when they all close */
+	void UpdateInputMode();
+
+	void PlayUISound(USoundBase* Sound) const;
+
+	void HandleWindowClosed();
+
+public:
+
+	AMMOHUD();
+
+protected:
+
 	virtual void BeginPlay() override;
+	virtual void Tick(float DeltaSeconds) override;
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 };

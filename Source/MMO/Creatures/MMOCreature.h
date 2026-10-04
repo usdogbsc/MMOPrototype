@@ -16,6 +16,8 @@ class UWidgetComponent;
 class UAnimMontage;
 class USoundBase;
 class UNiagaraSystem;
+class UMMOLootContainerComponent;
+class UMMOLootTable;
 
 /**
  *  Base class for hostile world creatures.
@@ -47,6 +49,14 @@ class AMMOCreature : public ACharacter, public IMMOTargetable, public IMMOMeleeA
 	/** Overhead UMG nameplate */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Components", meta=(AllowPrivateAccess="true"))
 	TObjectPtr<UWidgetComponent> Nameplate;
+
+	/** This corpse's loot (rolled fresh on every death) */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Components", meta=(AllowPrivateAccess="true"))
+	TObjectPtr<UMMOLootContainerComponent> Loot;
+
+	/** Floating marker shown while the corpse has loot */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Components", meta=(AllowPrivateAccess="true"))
+	TObjectPtr<UStaticMeshComponent> LootMarker;
 
 public:
 
@@ -93,13 +103,24 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Creature|Rewards", meta=(ClampMin=0))
 	int32 XPReward = 40;
 
-	/** Seconds the corpse stays visible */
+	/** What this creature can drop */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Creature|Rewards")
+	TSoftObjectPtr<UMMOLootTable> LootTable;
+
+	/** Seconds the corpse stays when it has no loot */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Creature|Respawn", meta=(ClampMin=0, Units="s"))
 	float CorpseDuration = 4.0f;
 
-	/** Seconds from death until respawn */
+	/** Seconds a corpse with unlooted items stays before it (and its loot) disappears */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Creature|Respawn", meta=(ClampMin=0, Units="s"))
+	float LootableCorpseDuration = 60.0f;
+
+	/** Seconds from death until respawn (never sooner than MinRespawnAfterCorpse after the corpse is gone) */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Creature|Respawn", meta=(ClampMin=0, Units="s"))
 	float RespawnDelay = 8.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Creature|Respawn", meta=(ClampMin=0, Units="s"))
+	float MinRespawnAfterCorpse = 2.0f;
 
 	/** Skeletal path: attack montage. Needs an MMO Melee Hit notify on the bite frame */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Creature|Animation")
@@ -179,6 +200,13 @@ protected:
 	UPROPERTY(Transient)
 	TObjectPtr<UNiagaraSystem> LoadedAttackImpactEffect;
 
+	UPROPERTY(Transient)
+	TObjectPtr<UMMOLootTable> LoadedLootTable;
+
+	/** World times for the corpse lifecycle */
+	double DeathTime = 0.0;
+	double CorpseRemoveTime = 0.0;
+
 	/** Where the creature spawned and returns to */
 	FTransform SpawnTransform;
 
@@ -234,6 +262,11 @@ public:
 
 	bool IsDead() const { return bIsDead; }
 
+	/** True while dead, visible and holding loot */
+	bool IsLootable() const;
+
+	UMMOLootContainerComponent* GetLoot() const { return Loot; }
+
 	bool IsAttacking() const { return bAttackPending || AttackAnimTime >= 0.0f; }
 
 	/** True while the AI is chasing or attacking */
@@ -269,6 +302,14 @@ protected:
 	void HandleDeath(AActor* Killer);
 
 	void HideCorpse();
+
+	/** (Re)schedules corpse removal Delay seconds from now */
+	void ScheduleCorpseRemoval(float Delay);
+
+	UFUNCTION()
+	void HandleLootChanged();
+
+	void UpdateLootMarker();
 
 	void Respawn();
 

@@ -43,9 +43,16 @@ public:
 
 	UMMOCombatComponent();
 
-	/** Damage dealt per swing at level 1 (level bonuses are applied by the owner) */
+	/** Weapon damage range rolled per swing. Set by the owner from the equipped weapon */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Combat|Basic Attack", meta=(ClampMin=0))
-	float BasicAttackDamage = 12.0f;
+	float WeaponDamageMin = 3.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Combat|Basic Attack", meta=(ClampMin=0))
+	float WeaponDamageMax = 5.0f;
+
+	/** Flat damage added to every swing (level and gear bonuses) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Combat|Basic Attack", meta=(ClampMin=0))
+	float BonusDamage = 0.0f;
 
 	/** Max gap between the attacker's and target's collision edges to start a swing, in cm */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Combat|Basic Attack", meta=(ClampMin=0, Units="cm"))
@@ -186,6 +193,13 @@ public:
 	/** Seconds until the swing timer is ready */
 	UFUNCTION(BlueprintPure, Category="Combat")
 	float GetBasicAttackCooldownRemaining() const;
+
+	/** Total per-swing damage range including bonuses */
+	UFUNCTION(BlueprintPure, Category="Combat")
+	void GetDamageRange(float& OutMin, float& OutMax) const;
+
+	/** Rolls one swing's damage */
+	float RollDamage() const;
 
 	/** World time of the last swing (used for out-of-combat checks) */
 	double GetLastAttackTime() const { return LastSwingTime; }

@@ -50,6 +50,10 @@ protected:
 	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category="Health")
 	bool bInvulnerable = false;
 
+	/** Armor from equipment. Reduces incoming damage by Armor / (Armor + ArmorConstant) */
+	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category="Health")
+	float Armor = 0.0f;
+
 	/** Who last damaged us. Used to award XP on death */
 	TWeakObjectPtr<AActor> LastInstigator;
 
@@ -72,7 +76,7 @@ public:
 
 	virtual void InitializeComponent() override;
 
-	/** Applies damage, clamped so health never goes below zero. Returns the amount applied */
+	/** Applies damage after armor reduction, clamped so health never goes below zero. Returns the amount applied */
 	UFUNCTION(BlueprintCallable, Category="Health")
 	float ApplyDamage(float Amount, AActor* DamageInstigator);
 
@@ -90,6 +94,20 @@ public:
 
 	UFUNCTION(BlueprintCallable, Category="Health")
 	void SetInvulnerable(bool bNewInvulnerable) { bInvulnerable = bNewInvulnerable; }
+
+	/** Armor at which incoming damage is halved */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Health", meta=(ClampMin=1))
+	float ArmorConstant = 50.0f;
+
+	UFUNCTION(BlueprintCallable, Category="Health")
+	void SetArmor(float NewArmor) { Armor = FMath::Max(0.0f, NewArmor); }
+
+	UFUNCTION(BlueprintPure, Category="Health")
+	float GetArmor() const { return Armor; }
+
+	/** Fraction of incoming damage removed by armor (0..1) */
+	UFUNCTION(BlueprintPure, Category="Health")
+	float GetDamageReduction() const { return Armor / (Armor + ArmorConstant); }
 
 	UFUNCTION(BlueprintPure, Category="Health")
 	float GetCurrentHealth() const { return CurrentHealth; }

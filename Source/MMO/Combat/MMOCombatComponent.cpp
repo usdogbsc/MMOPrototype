@@ -309,7 +309,7 @@ void UMMOCombatComponent::ResolveSwing()
 		return;
 	}
 
-	const float Applied = TargetHealth->ApplyDamage(BasicAttackDamage, GetOwner());
+	const float Applied = TargetHealth->ApplyDamage(RollDamage(), GetOwner());
 	OnBasicAttack.Broadcast(Target, Applied);
 
 	// killing blow: auto-attack ends right away
@@ -330,6 +330,19 @@ void UMMOCombatComponent::WarnOutOfRange()
 	LastOutOfRangeMessageTime = Now;
 	++OutOfRangeWarningCount;
 	OnCombatError.Broadcast(LOCTEXT("OutOfRange", "Out of Range"));
+}
+
+void UMMOCombatComponent::GetDamageRange(float& OutMin, float& OutMax) const
+{
+	OutMin = WeaponDamageMin + BonusDamage;
+	OutMax = FMath::Max(WeaponDamageMin, WeaponDamageMax) + BonusDamage;
+}
+
+float UMMOCombatComponent::RollDamage() const
+{
+	float Min, Max;
+	GetDamageRange(Min, Max);
+	return static_cast<float>(FMath::RandRange(FMath::RoundToInt(Min), FMath::RoundToInt(Max)));
 }
 
 bool UMMOCombatComponent::IsTargetInRange() const

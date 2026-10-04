@@ -30,8 +30,10 @@ float UMMOHealthComponent::ApplyDamage(float Amount, AActor* DamageInstigator)
 		return 0.0f;
 	}
 
-	const float Applied = FMath::Min(Amount, CurrentHealth);
-	CurrentHealth = FMath::Max(0.0f, CurrentHealth - Amount);
+	// all damage is physical for now, so armor always applies
+	const float Mitigated = Amount * (1.0f - GetDamageReduction());
+	const float Applied = FMath::Min(Mitigated, CurrentHealth);
+	CurrentHealth = FMath::Max(0.0f, CurrentHealth - Mitigated);
 	LastInstigator = DamageInstigator;
 
 	OnAnyCombatEvent.Broadcast(this, EMMOCombatEvent::Damage, Applied);

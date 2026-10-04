@@ -6,6 +6,10 @@
 #include "GameFramework/Character.h"
 #include "Logging/LogMacros.h"
 #include "Combat/MMOMeleeAttacker.h"
+#include "Combat/MMOCombatComponent.h"
+#include "Items/MMOItemTypes.h"
+#include "Items/MMOEquipmentComponent.h"
+#include "Items/MMOLootContainerComponent.h"
 #include "MMOCharacter.generated.h"
 
 class USpringArmComponent;
@@ -17,7 +21,11 @@ class UNiagaraSystem;
 class UCameraShakeBase;
 class UMMOHealthComponent;
 class UMMOProgressionComponent;
-class UMMOCombatComponent;
+class UMMOInventoryComponent;
+class UMMOEquipmentComponent;
+class UMMOLootContainerComponent;
+class UStaticMeshComponent;
+class AMMOCreature;
 struct FInputActionValue;
 
 DECLARE_LOG_CATEGORY_EXTERN(LogTemplateCharacter, Log, All);
@@ -50,6 +58,18 @@ class AMMOCharacter : public ACharacter, public IMMOMeleeAttacker
 	/** Targeting and Basic Attack */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Components", meta = (AllowPrivateAccess = "true"))
 	TObjectPtr<UMMOCombatComponent> Combat;
+
+	/** Backpack */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Components", meta = (AllowPrivateAccess = "true"))
+	TObjectPtr<UMMOInventoryComponent> Inventory;
+
+	/** Worn items */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Components", meta = (AllowPrivateAccess = "true"))
+	TObjectPtr<UMMOEquipmentComponent> Equipment;
+
+	/** Visual for the main-hand item (uses the item's Equipped Mesh, if any) */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Components", meta = (AllowPrivateAccess = "true"))
+	TObjectPtr<UStaticMeshComponent> MainHandMesh;
 	
 protected:
 
@@ -88,6 +108,41 @@ protected:
 	/** Camera zoom (axis). If unset, a runtime action bound to the mouse wheel is created */
 	UPROPERTY(EditAnywhere, Category="Input|Camera")
 	TObjectPtr<UInputAction> ZoomAction;
+
+	/** Loot a nearby corpse. If unset, a runtime action bound to F and Right Mouse Button is created */
+	UPROPERTY(EditAnywhere, Category="Input|Items")
+	TObjectPtr<UInputAction> InteractAction;
+
+	/** Toggle the backpack. If unset, a runtime action bound to B and I is created */
+	UPROPERTY(EditAnywhere, Category="Input|Items")
+	TObjectPtr<UInputAction> InventoryAction;
+
+	/** Toggle the character window. If unset, a runtime action bound to C is created */
+	UPROPERTY(EditAnywhere, Category="Input|Items")
+	TObjectPtr<UInputAction> CharacterAction;
+
+	/** How close the player must be to loot a corpse */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Items", meta=(ClampMin=0, Units="cm"))
+	float InteractRange = 350.0f;
+
+	/** Socket the main-hand visual attaches to */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Items")
+	FName MainHandSocket = TEXT("weapon_r");
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Items|Audio")
+	TSoftObjectPtr<USoundBase> LootSound;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Items|Audio")
+	TSoftObjectPtr<USoundBase> RareLootSound;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Items|Audio")
+	TSoftObjectPtr<USoundBase> CoinSound;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Items|Audio")
+	TSoftObjectPtr<USoundBase> EquipSound;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Items|Audio")
+	TSoftObjectPtr<USoundBase> ErrorSound;
 
 	/** Mapping context for the combat actions. If unset, one is created at runtime with the default keys */
 	UPROPERTY(EditAnywhere, Category="Input|Combat")
@@ -194,9 +249,8 @@ protected:
 	/** Zoom distance the camera is easing toward */
 	float DesiredCameraDistance = 550.0f;
 
-	/** Base stats captured at BeginPlay, before level bonuses */
+	/** Base max health captured at BeginPlay, before level and gear bonuses */
 	float BaseMaxHealth = 100.0f;
-	float BaseAttackDamage = 12.0f;
 
 	/** Where the player respawns */
 	FTransform RespawnTransform;
@@ -230,8 +284,23 @@ protected:
 	/** Creates default combat input actions/mapping for any that were not assigned in the Blueprint */
 	void CreateDefaultCombatInput();
 
-	/** Applies level-based stat bonuses */
-	void ApplyLevelStats(int32 Level, bool bFillHealth);
+	/** Rebuilds max health, armor and swing damage from level + equipment */
+	void RecalculateStats(bool bFillHealth);
+
+	UFUNCTION()
+	void HandleEquipmentChanged();
+
+	UFUNCTION()
+	void HandleItemsReceived(UMMOItemDefinition* Item, int32 Quantity);
+
+	UFUNCTION()
+	void HandleCurrencyReceived(int32 Amount);
+
+	/** Updates the main-hand visual from the equipped weapon */
+	void RefreshEquipmentVisuals();
+
+	/** Finds the corpse the player is trying to loot: under the cursor, the current target, or the nearest one */
+	AMMOCreature* FindLootableCorpse(bool& bOutTooFar) const;
 
 	UFUNCTION()
 	void HandleLevelUp(int32 NewLevel);
@@ -322,6 +391,34 @@ public:
 	/** Distance the camera is easing toward */
 	float GetDesiredCameraDistance() const { return DesiredCameraDistance; }
 
+	/** Loots the nearest corpse in reach (opens the loot window) */
+	UFUNCTION(BlueprintCallable, Category="Input")
+	virtual void DoInteract();
+
+	UFUNCTION(BlueprintCallable, Category="Input")
+	virtual void DoToggleInventory();
+
+	UFUNCTION(BlueprintCallable, Category="Input")
+	virtual void DoToggleCharacter();
+
+	/** Item actions used by the UI and debug tools. Each reports problems through OnPlayerMessage */
+	EMMOEquipResult EquipInventorySlot(int32 SlotIndex);
+	EMMOEquipResult UnequipSlot(EMMOEquipmentSlot Slot, int32 PreferredInventorySlot = INDEX_NONE);
+	bool MoveInventorySlot(int32 FromIndex, int32 ToIndex);
+	EMMOLootResult LootItem(UMMOLootContainerComponent* Container, const FGuid& InstanceId);
+	EMMOLootResult LootCurrency(UMMOLootContainerComponent* Container);
+	EMMOLootResult LootAll(UMMOLootContainerComponent* Container);
+
+	/** True if the container's owner is still a lootable corpse within reach */
+	bool CanReachLoot(const UMMOLootContainerComponent* Container) const;
+
+	/** Shows a red message such as "Inventory Full" */
+	void ShowPlayerMessage(const FText& Message, bool bPlayErrorSound = true);
+
+	/** Player-facing messages from item actions (shown like combat errors) */
+	UPROPERTY(BlueprintAssignable, Category="Items")
+	FMMOCombatErrorSignature OnPlayerMessage;
+
 	/** True while dead and waiting to respawn */
 	UFUNCTION(BlueprintPure, Category="Combat")
 	bool IsDead() const;
@@ -346,5 +443,9 @@ public:
 	FORCEINLINE UMMOProgressionComponent* GetProgression() const { return Progression; }
 
 	FORCEINLINE UMMOCombatComponent* GetCombat() const { return Combat; }
+
+	FORCEINLINE UMMOInventoryComponent* GetInventory() const { return Inventory; }
+
+	FORCEINLINE UMMOEquipmentComponent* GetEquipment() const { return Equipment; }
 };
 

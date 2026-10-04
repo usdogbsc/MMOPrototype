@@ -43,18 +43,22 @@ void UMMONameplateWidget::BuildDefaultLayout()
 	BarSlot->SetPadding(FMargin(0.0f, 2.0f, 0.0f, 0.0f));
 }
 
-void UMMONameplateWidget::SetNameplateState(const FText& Name, int32 Level, float HealthPercent, bool bTargeted, bool bDead, bool bInCombat)
+void UMMONameplateWidget::SetNameplateState(const FText& Name, int32 Level, float HealthPercent, bool bTargeted, bool bDead, bool bInCombat, bool bLootable)
 {
 	if (NameText)
 	{
-		const FString Label = bTargeted ? FString::Printf(TEXT("> %s <"), *Name.ToString()) : Name.ToString();
+		FString Label = bTargeted ? FString::Printf(TEXT("> %s <"), *Name.ToString()) : Name.ToString();
+		if (bLootable)
+		{
+			Label += TEXT("  [Loot]");
+		}
 		if (Label != CachedLabel)
 		{
 			CachedLabel = Label;
 			NameText->SetText(FText::FromString(Label));
 		}
 
-		const FLinearColor Color = bDead ? MMOUI::Colors::Dead : (bTargeted ? MMOUI::Colors::Gold : MMOUI::Colors::Hostile);
+		const FLinearColor Color = bLootable ? MMOUI::Colors::Gold : (bDead ? MMOUI::Colors::Dead : (bTargeted ? MMOUI::Colors::Gold : MMOUI::Colors::Hostile));
 		NameText->SetColorAndOpacity(FSlateColor(Color));
 	}
 

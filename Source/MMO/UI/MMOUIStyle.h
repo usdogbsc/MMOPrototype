@@ -11,6 +11,9 @@ class UWidgetTree;
 class UTextBlock;
 class UProgressBar;
 class UBorder;
+class UButton;
+class UWidget;
+class UVerticalBox;
 
 /** Shared look for the prototype MMO HUD widgets built in C++ */
 namespace MMOUI
@@ -40,4 +43,13 @@ namespace MMOUI
 	UProgressBar* MakeBar(UWidgetTree* Tree, const FLinearColor& FillColor, const FLinearColor& BackgroundColor, float Radius = 3.0f);
 
 	UBorder* MakePanel(UWidgetTree* Tree, const FLinearColor& Color, float Radius, const FMargin& Padding, const FLinearColor& OutlineColor = FLinearColor::Transparent, float OutlineWidth = 0.0f);
+
+	/** Flat rounded button with a text label */
+	UButton* MakeButton(UWidgetTree* Tree, const FString& Label, int32 FontSize = 13, UTextBlock** OutLabel = nullptr);
+
+	/**
+	 *  Standard window: title bar with a close button over a content area.
+	 *  Returns the root widget; OutContent receives the vertical box to fill.
+	 */
+	UWidget* MakeWindow(UWidgetTree* Tree, const FString& Title, float Width, UVerticalBox*& OutContent, UButton*& OutCloseButton, UTextBlock** OutTitle = nullptr);
 }

@@ -17,6 +17,15 @@
 #include "Combat/MMOHealthComponent.h"
 #include "Combat/MMOProgressionComponent.h"
 #include "Combat/MMOCombatComponent.h"
+#include "Creatures/MMOCreature.h"
+#include "Items/MMOEquipmentComponent.h"
+#include "Items/MMOInventoryComponent.h"
+#include "Items/MMOItemDefinition.h"
+#include "Items/MMOLootContainerComponent.h"
+#include "UI/MMOHUD.h"
+#include "Components/StaticMeshComponent.h"
+#include "EngineUtils.h"
+#include "Materials/MaterialInstanceDynamic.h"
 #include "Kismet/GameplayStatics.h"
 #include "NiagaraFunctionLibrary.h"
 #include "NiagaraSystem.h"
@@ -33,6 +42,11 @@ namespace MMOCharacterSounds
 	static const FName AutoAttackOn(TEXT("AutoAttackOn"));
 	static const FName AutoAttackOff(TEXT("AutoAttackOff"));
 	static const FName Death(TEXT("Death"));
+	static const FName Loot(TEXT("Loot"));
+	static const FName RareLoot(TEXT("RareLoot"));
+	static const FName Coin(TEXT("Coin"));
+	static const FName Equip(TEXT("Equip"));
+	static const FName Error(TEXT("Error"));
 
 	static TSoftObjectPtr<USoundBase> Default(const TCHAR* AssetName)
 	{
@@ -82,6 +96,15 @@ AMMOCharacter::AMMOCharacter()
 
 	Combat = CreateDefaultSubobject<UMMOCombatComponent>(TEXT("Combat"));
 
+	// items
+	Inventory = CreateDefaultSubobject<UMMOInventoryComponent>(TEXT("Inventory"));
+	Equipment = CreateDefaultSubobject<UMMOEquipmentComponent>(TEXT("Equipment"));
+
+	MainHandMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("MainHandMesh"));
+	MainHandMesh->SetupAttachment(GetMesh(), MainHandSocket);
+	MainHandMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	MainHandMesh->SetCastShadow(true);
+
 	// presentation defaults (soft references: missing assets just mean no sound/effect)
 	SwingSound = MMOCharacterSounds::Default(TEXT("S_MMO_Swing"));
 	MeleeImpactSound = MMOCharacterSounds::Default(TEXT("S_MMO_MeleeImpact"));
@@ -90,6 +113,11 @@ AMMOCharacter::AMMOCharacter()
 	AutoAttackOnSound = MMOCharacterSounds::Default(TEXT("S_MMO_AutoAttackOn"));
 	AutoAttackOffSound = MMOCharacterSounds::Default(TEXT("S_MMO_AutoAttackOff"));
 	DeathSound = MMOCharacterSounds::Default(TEXT("S_MMO_PlayerDeath"));
+	LootSound = MMOCharacterSounds::Default(TEXT("S_MMO_LootPickup"));
+	RareLootSound = MMOCharacterSounds::Default(TEXT("S_MMO_RareLoot"));
+	CoinSound = MMOCharacterSounds::Default(TEXT("S_MMO_Coins"));
+	EquipSound = MMOCharacterSounds::Default(TEXT("S_MMO_Equip"));
+	ErrorSound = MMOCharacterSounds::Default(TEXT("S_MMO_Error"));
 	MeleeImpactEffect = TSoftObjectPtr<UNiagaraSystem>(FSoftObjectPath(TEXT("/Game/Variant_Combat/VFX/NS_Damage.NS_Damage")));
 	MeleeImpactCameraShake = TSoftClassPtr<UCameraShakeBase>(FSoftObjectPath(TEXT("/Game/Variant_Combat/Blueprints/BP_CameraShake_Hit_Enemy.BP_CameraShake_Hit_Enemy_C")));
 	HurtCameraShake = TSoftClassPtr<UCameraShakeBase>(FSoftObjectPath(TEXT("/Game/Variant_Combat/Blueprints/BP_CameraShake_Hit_Player.BP_CameraShake_Hit_Player_C")));
@@ -103,12 +131,20 @@ void AMMOCharacter::BeginPlay()
 	Super::BeginPlay();
 
 	BaseMaxHealth = Health->GetMaxHealth();
-	BaseAttackDamage = Combat->BasicAttackDamage;
 	RespawnTransform = GetActorTransform();
 	MeshRelativeTransform = GetMesh()->GetRelativeTransform();
 	MeshCollisionProfile = GetMesh()->GetCollisionProfileName();
 
-	ApplyLevelStats(Progression->GetLevel(), true);
+	// make sure the weapon visual follows the configured socket even if the Blueprint changed the mesh
+	MainHandMesh->AttachToComponent(GetMesh(), FAttachmentTransformRules::SnapToTargetNotIncludingScale, MainHandSocket);
+
+	Equipment->OnEquipmentChanged.AddDynamic(this, &AMMOCharacter::HandleEquipmentChanged);
+	Inventory->OnItemsReceived.AddDynamic(this, &AMMOCharacter::HandleItemsReceived);
+	Inventory->OnCurrencyReceived.AddDynamic(this, &AMMOCharacter::HandleCurrencyReceived);
+
+	// starting gear was equipped during component BeginPlay, before these bindings existed
+	RecalculateStats(true);
+	RefreshEquipmentVisuals();
 
 	Health->OnDamaged.AddDynamic(this, &AMMOCharacter::HandleDamaged);
 	Health->OnDeath.AddDynamic(this, &AMMOCharacter::HandleDeath);
@@ -141,6 +177,11 @@ void AMMOCharacter::BeginPlay()
 	LoadedSounds.Add(MMOCharacterSounds::AutoAttackOn, AutoAttackOnSound.LoadSynchronous());
 	LoadedSounds.Add(MMOCharacterSounds::AutoAttackOff, AutoAttackOffSound.LoadSynchronous());
 	LoadedSounds.Add(MMOCharacterSounds::Death, DeathSound.LoadSynchronous());
+	LoadedSounds.Add(MMOCharacterSounds::Loot, LootSound.LoadSynchronous());
+	LoadedSounds.Add(MMOCharacterSounds::RareLoot, RareLootSound.LoadSynchronous());
+	LoadedSounds.Add(MMOCharacterSounds::Coin, CoinSound.LoadSynchronous());
+	LoadedSounds.Add(MMOCharacterSounds::Equip, EquipSound.LoadSynchronous());
+	LoadedSounds.Add(MMOCharacterSounds::Error, ErrorSound.LoadSynchronous());
 	LoadedMeleeImpactEffect = MeleeImpactEffect.LoadSynchronous();
 	LoadedMeleeImpactCameraShake = MeleeImpactCameraShake.LoadSynchronous();
 	LoadedHurtCameraShake = HurtCameraShake.LoadSynchronous();
@@ -174,6 +215,11 @@ void AMMOCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputCompon
 		EnhancedInputComponent->BindAction(CycleTargetAction, ETriggerEvent::Started, this, &AMMOCharacter::DoCycleTarget);
 		EnhancedInputComponent->BindAction(BasicAttackAction, ETriggerEvent::Started, this, &AMMOCharacter::DoBasicAttack);
 		EnhancedInputComponent->BindAction(ClearTargetAction, ETriggerEvent::Started, this, &AMMOCharacter::DoClearTarget);
+
+		// Items
+		EnhancedInputComponent->BindAction(InteractAction, ETriggerEvent::Started, this, &AMMOCharacter::DoInteract);
+		EnhancedInputComponent->BindAction(InventoryAction, ETriggerEvent::Started, this, &AMMOCharacter::DoToggleInventory);
+		EnhancedInputComponent->BindAction(CharacterAction, ETriggerEvent::Started, this, &AMMOCharacter::DoToggleCharacter);
 
 		// Camera zoom
 		EnhancedInputComponent->BindAction(ZoomAction, ETriggerEvent::Triggered, this, &AMMOCharacter::Zoom);
@@ -235,6 +281,13 @@ void AMMOCharacter::DoMove(float Right, float Forward)
 
 void AMMOCharacter::DoLook(float Yaw, float Pitch)
 {
+	// while windows are open the mouse drives the cursor, not the camera
+	const APlayerController* PC = Cast<APlayerController>(GetController());
+	if (PC && PC->bShowMouseCursor)
+	{
+		return;
+	}
+
 	if (GetController() != nullptr)
 	{
 		// add yaw and pitch input to controller
@@ -265,7 +318,7 @@ void AMMOCharacter::CreateDefaultCombatInput()
 		CombatMappingContext = NewObject<UInputMappingContext>(this, TEXT("IMC_MMOCombat_Runtime"));
 	}
 
-	auto EnsureAction = [this, bCreateContext](TObjectPtr<UInputAction>& Action, const TCHAR* Name, const FKey& Key, EInputActionValueType ValueType = EInputActionValueType::Boolean)
+	auto EnsureAction = [this, bCreateContext](TObjectPtr<UInputAction>& Action, const TCHAR* Name, const FKey& Key, EInputActionValueType ValueType = EInputActionValueType::Boolean, FKey AltKey = FKey())
 	{
 		if (!Action)
 		{
@@ -275,6 +328,10 @@ void AMMOCharacter::CreateDefaultCombatInput()
 		if (bCreateContext)
 		{
 			CombatMappingContext->MapKey(Action, Key);
+			if (AltKey.IsValid())
+			{
+				CombatMappingContext->MapKey(Action, AltKey);
+			}
 		}
 	};
 
@@ -283,6 +340,9 @@ void AMMOCharacter::CreateDefaultCombatInput()
 	EnsureAction(BasicAttackAction, TEXT("IA_MMOBasicAttack_Runtime"), EKeys::One);
 	EnsureAction(ClearTargetAction, TEXT("IA_MMOClearTarget_Runtime"), EKeys::Escape);
 	EnsureAction(ZoomAction, TEXT("IA_MMOZoom_Runtime"), EKeys::MouseWheelAxis, EInputActionValueType::Axis1D);
+	EnsureAction(InteractAction, TEXT("IA_MMOInteract_Runtime"), EKeys::F, EInputActionValueType::Boolean, EKeys::RightMouseButton);
+	EnsureAction(InventoryAction, TEXT("IA_MMOInventory_Runtime"), EKeys::B, EInputActionValueType::Boolean, EKeys::I);
+	EnsureAction(CharacterAction, TEXT("IA_MMOCharacter_Runtime"), EKeys::C);
 
 	if (const APlayerController* PC = Cast<APlayerController>(GetController()))
 	{
@@ -298,10 +358,28 @@ void AMMOCharacter::CreateDefaultCombatInput()
 
 void AMMOCharacter::DoTarget()
 {
-	if (!IsDead())
+	if (IsDead())
 	{
-		Combat->TargetFromView();
+		return;
 	}
+
+	// with the cursor visible (windows open), click-target what is under the cursor
+	APlayerController* PC = Cast<APlayerController>(GetController());
+	if (PC && PC->bShowMouseCursor)
+	{
+		FHitResult Hit;
+		if (PC->GetHitResultUnderCursor(ECC_Pawn, false, Hit) && Cast<IMMOTargetable>(Hit.GetActor()) && Cast<IMMOTargetable>(Hit.GetActor())->IsTargetable())
+		{
+			Combat->SetTarget(Hit.GetActor());
+		}
+		else
+		{
+			Combat->ClearTarget();
+		}
+		return;
+	}
+
+	Combat->TargetFromView();
 }
 
 void AMMOCharacter::DoCycleTarget()
@@ -322,6 +400,13 @@ void AMMOCharacter::DoBasicAttack()
 
 void AMMOCharacter::DoClearTarget()
 {
+	// Escape closes open windows first, like most MMOs; otherwise it clears the target
+	AMMOHUD* HUD = Cast<AMMOHUD>(Cast<APlayerController>(GetController()) ? Cast<APlayerController>(GetController())->GetHUD() : nullptr);
+	if (HUD && HUD->CloseAllWindows())
+	{
+		return;
+	}
+
 	Combat->ClearTarget();
 }
 
@@ -349,20 +434,235 @@ float AMMOCharacter::GetRespawnTimeRemaining() const
 	return FMath::Max(0.0f, static_cast<float>(RespawnTime - GetWorld()->GetTimeSeconds()));
 }
 
-void AMMOCharacter::ApplyLevelStats(int32 Level, bool bFillHealth)
+void AMMOCharacter::RecalculateStats(bool bFillHealth)
 {
-	const int32 LevelsAboveFirst = FMath::Max(0, Level - 1);
-	Health->SetMaxHealth(BaseMaxHealth + MaxHealthPerLevel * LevelsAboveFirst, bFillHealth);
-	Combat->BasicAttackDamage = BaseAttackDamage + AttackDamagePerLevel * LevelsAboveFirst;
+	const int32 LevelsAboveFirst = FMath::Max(0, Progression->GetLevel() - 1);
+	const FMMOStatModifiers Gear = Equipment->GetTotalStats();
+
+	Health->SetMaxHealth(BaseMaxHealth + MaxHealthPerLevel * LevelsAboveFirst + Gear.MaxHealth, bFillHealth);
+	Health->SetArmor(Gear.Armor);
+
+	// swing damage = weapon roll + level bonus + gear bonus
+	Equipment->GetWeaponDamage(Combat->WeaponDamageMin, Combat->WeaponDamageMax);
+	Combat->BonusDamage = AttackDamagePerLevel * LevelsAboveFirst + Gear.AttackDamage;
+}
+
+void AMMOCharacter::HandleEquipmentChanged()
+{
+	RecalculateStats(false);
+	RefreshEquipmentVisuals();
+}
+
+void AMMOCharacter::RefreshEquipmentVisuals()
+{
+	const FMMOItemStack& Weapon = Equipment->GetEquipped(EMMOEquipmentSlot::MainHand);
+	UStaticMesh* WeaponMesh = Weapon.IsEmpty() ? nullptr : Weapon.Item->EquippedMesh.Get();
+
+	MainHandMesh->SetStaticMesh(WeaponMesh);
+	MainHandMesh->SetVisibility(WeaponMesh != nullptr);
+	if (WeaponMesh)
+	{
+		MainHandMesh->SetRelativeTransform(Weapon.Item->EquippedMeshTransform);
+		if (UMaterialInstanceDynamic* Material = MainHandMesh->CreateDynamicMaterialInstance(0))
+		{
+			Material->SetVectorParameterValue(TEXT("Color"), Weapon.Item->EquippedMeshColor);
+		}
+	}
+}
+
+void AMMOCharacter::HandleItemsReceived(UMMOItemDefinition* Item, int32 Quantity)
+{
+	PlayPresentationSound(Item && Item->Rarity >= EMMOItemRarity::Rare ? MMOCharacterSounds::RareLoot : MMOCharacterSounds::Loot);
+}
+
+void AMMOCharacter::HandleCurrencyReceived(int32 Amount)
+{
+	PlayPresentationSound(MMOCharacterSounds::Coin);
+}
+
+void AMMOCharacter::ShowPlayerMessage(const FText& Message, bool bPlayErrorSound)
+{
+	OnPlayerMessage.Broadcast(Message);
+	if (bPlayErrorSound)
+	{
+		PlayPresentationSound(MMOCharacterSounds::Error);
+	}
+}
+
+EMMOEquipResult AMMOCharacter::EquipInventorySlot(int32 SlotIndex)
+{
+	const EMMOEquipResult Result = Equipment->EquipFromInventory(Inventory, SlotIndex);
+	if (Result == EMMOEquipResult::Success)
+	{
+		PlayPresentationSound(MMOCharacterSounds::Equip);
+	}
+	else if (Result == EMMOEquipResult::NotEquippable)
+	{
+		ShowPlayerMessage(NSLOCTEXT("MMOItems", "CannotEquip", "You can't equip that."));
+	}
+	return Result;
+}
+
+EMMOEquipResult AMMOCharacter::UnequipSlot(EMMOEquipmentSlot Slot, int32 PreferredInventorySlot)
+{
+	const EMMOEquipResult Result = Equipment->Unequip(Slot, Inventory, PreferredInventorySlot);
+	if (Result == EMMOEquipResult::Success)
+	{
+		PlayPresentationSound(MMOCharacterSounds::Equip);
+	}
+	else if (Result == EMMOEquipResult::InventoryFull)
+	{
+		ShowPlayerMessage(NSLOCTEXT("MMOItems", "InventoryFull", "Inventory Full"));
+	}
+	return Result;
+}
+
+bool AMMOCharacter::MoveInventorySlot(int32 FromIndex, int32 ToIndex)
+{
+	return Inventory->MoveSlot(FromIndex, ToIndex);
+}
+
+EMMOLootResult AMMOCharacter::LootItem(UMMOLootContainerComponent* Container, const FGuid& InstanceId)
+{
+	if (!CanReachLoot(Container))
+	{
+		return EMMOLootResult::NotFound;
+	}
+
+	const EMMOLootResult Result = Container->TakeItem(InstanceId, Inventory);
+	if (Result == EMMOLootResult::InventoryFull || Result == EMMOLootResult::Partial)
+	{
+		ShowPlayerMessage(NSLOCTEXT("MMOItems", "InventoryFull", "Inventory Full"));
+	}
+	return Result;
+}
+
+EMMOLootResult AMMOCharacter::LootCurrency(UMMOLootContainerComponent* Container)
+{
+	return CanReachLoot(Container) ? Container->TakeCurrency(Inventory) : EMMOLootResult::NotFound;
+}
+
+EMMOLootResult AMMOCharacter::LootAll(UMMOLootContainerComponent* Container)
+{
+	if (!CanReachLoot(Container))
+	{
+		return EMMOLootResult::NotFound;
+	}
+
+	const EMMOLootResult Result = Container->TakeAll(Inventory);
+	if (Result == EMMOLootResult::InventoryFull || Result == EMMOLootResult::Partial)
+	{
+		ShowPlayerMessage(NSLOCTEXT("MMOItems", "InventoryFull", "Inventory Full"));
+	}
+	return Result;
+}
+
+bool AMMOCharacter::CanReachLoot(const UMMOLootContainerComponent* Container) const
+{
+	const AMMOCreature* Corpse = Container ? Cast<AMMOCreature>(Container->GetOwner()) : nullptr;
+	return Corpse && !IsDead() && Corpse->IsLootable() && FVector::Dist2D(Corpse->GetActorLocation(), GetActorLocation()) <= InteractRange + 150.0f;
+}
+
+AMMOCreature* AMMOCharacter::FindLootableCorpse(bool& bOutTooFar) const
+{
+	bOutTooFar = false;
+
+	// with the cursor visible: whatever corpse is under it
+	const APlayerController* PC = Cast<APlayerController>(GetController());
+	if (PC && PC->bShowMouseCursor)
+	{
+		FHitResult Hit;
+		if (PC->GetHitResultUnderCursor(ECC_Visibility, false, Hit))
+		{
+			if (AMMOCreature* Corpse = Cast<AMMOCreature>(Hit.GetActor()))
+			{
+				if (Corpse->IsLootable())
+				{
+					bOutTooFar = FVector::Dist2D(Corpse->GetActorLocation(), GetActorLocation()) > InteractRange;
+					return bOutTooFar ? nullptr : Corpse;
+				}
+			}
+		}
+	}
+
+	// otherwise: the nearest lootable corpse in reach
+	AMMOCreature* Best = nullptr;
+	float BestDistance = InteractRange;
+	for (TActorIterator<AMMOCreature> It(GetWorld()); It; ++It)
+	{
+		if (!It->IsLootable())
+		{
+			continue;
+		}
+
+		const float Distance = FVector::Dist2D(It->GetActorLocation(), GetActorLocation());
+		if (Distance <= BestDistance)
+		{
+			BestDistance = Distance;
+			Best = *It;
+		}
+		else if (Distance <= InteractRange * 3.0f)
+		{
+			bOutTooFar = true;
+		}
+	}
+
+	if (Best)
+	{
+		bOutTooFar = false;
+	}
+	return Best;
+}
+
+void AMMOCharacter::DoInteract()
+{
+	if (IsDead())
+	{
+		return;
+	}
+
+	bool bTooFar = false;
+	AMMOCreature* Corpse = FindLootableCorpse(bTooFar);
+	if (!Corpse)
+	{
+		if (bTooFar)
+		{
+			ShowPlayerMessage(NSLOCTEXT("MMOItems", "TooFar", "You are too far away."));
+		}
+		return;
+	}
+
+	if (AMMOHUD* HUD = Cast<AMMOHUD>(Cast<APlayerController>(GetController())->GetHUD()))
+	{
+		HUD->OpenLoot(Corpse->GetLoot());
+	}
+}
+
+void AMMOCharacter::DoToggleInventory()
+{
+	if (AMMOHUD* HUD = Cast<AMMOHUD>(Cast<APlayerController>(GetController()) ? Cast<APlayerController>(GetController())->GetHUD() : nullptr))
+	{
+		HUD->ToggleInventory();
+	}
+}
+
+void AMMOCharacter::DoToggleCharacter()
+{
+	if (AMMOHUD* HUD = Cast<AMMOHUD>(Cast<APlayerController>(GetController()) ? Cast<APlayerController>(GetController())->GetHUD() : nullptr))
+	{
+		HUD->ToggleCharacter();
+	}
 }
 
 void AMMOCharacter::HandleLevelUp(int32 NewLevel)
 {
 	// levelling up fully heals: a classic, satisfying reward that also keeps the test loop moving
-	ApplyLevelStats(NewLevel, true);
+	RecalculateStats(true);
 	PlayPresentationSound(MMOCharacterSounds::LevelUp);
 
-	UE_LOG(LogMMO, Log, TEXT("Player reached level %d (Max Health %.0f, Basic Attack %.0f)"), NewLevel, Health->GetMaxHealth(), Combat->BasicAttackDamage);
+	float DamageMin, DamageMax;
+	Combat->GetDamageRange(DamageMin, DamageMax);
+	UE_LOG(LogMMO, Log, TEXT("Player reached level %d (Max Health %.0f, Damage %.0f-%.0f)"), NewLevel, Health->GetMaxHealth(), DamageMin, DamageMax);
 }
 
 void AMMOCharacter::HandleDamaged(float Amount, AActor* DamageInstigator)

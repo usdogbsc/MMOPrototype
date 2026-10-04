@@ -21,7 +21,7 @@ class UMMONameplateWidget : public UUserWidget
 
 public:
 
-	void SetNameplateState(const FText& Name, int32 Level, float HealthPercent, bool bTargeted, bool bDead, bool bInCombat);
+	void SetNameplateState(const FText& Name, int32 Level, float HealthPercent, bool bTargeted, bool bDead, bool bInCombat, bool bLootable = false);
 
 protected:
 

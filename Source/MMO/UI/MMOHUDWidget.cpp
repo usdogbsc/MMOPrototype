@@ -2,6 +2,12 @@
 
 #include "UI/MMOHUDWidget.h"
 #include "UI/MMOHotbarSlotWidget.h"
+#include "UI/MMOCharacterWindowWidget.h"
+#include "UI/MMOInventoryWindowWidget.h"
+#include "UI/MMOLootWindowWidget.h"
+#include "Items/MMOInventoryComponent.h"
+#include "Items/MMOItemDefinition.h"
+#include "Items/MMOLootContainerComponent.h"
 #include "UI/MMOUIStyle.h"
 #include "UI/MMOUnitFrameWidget.h"
 #include "MMOCharacter.h"
@@ -53,8 +59,8 @@ void UMMOHUDWidget::NativeOnInitialized()
 		BuildDefaultLayout();
 	}
 
-	// the HUD never takes mouse input away from the game
-	SetVisibility(ESlateVisibility::HitTestInvisible);
+	// only the windows take mouse input; everything else lets clicks through to the game
+	SetVisibility(ESlateVisibility::SelfHitTestInvisible);
 }
 
 void UMMOHUDWidget::BuildDefaultLayout()
@@ -63,6 +69,7 @@ void UMMOHUDWidget::BuildDefaultLayout()
 	using namespace MMOHUDLayout;
 
 	UCanvasPanel* Root = WidgetTree->ConstructWidget<UCanvasPanel>(UCanvasPanel::StaticClass(), TEXT("Root"));
+	Root->SetVisibility(ESlateVisibility::SelfHitTestInvisible);
 	WidgetTree->RootWidget = Root;
 
 	// screen flashes sit underneath everything else
@@ -85,7 +92,7 @@ void UMMOHUDWidget::BuildDefaultLayout()
 	TargetFrame = WidgetTree->ConstructWidget<UMMOUnitFrameWidget>(FrameClass, TEXT("TargetFrame"));
 	Place(Root, TargetFrame, FAnchors(0.0f, 0.0f), FVector2D::ZeroVector, FVector2D(330.0f, 24.0f));
 
-	UTextBlock* HelpText = MakeText(WidgetTree, TEXT("LMB / Tab: target    Esc: clear target    1: auto attack    Wheel: zoom"), 11, Colors::TextDim);
+	UTextBlock* HelpText = MakeText(WidgetTree, TEXT("LMB / Tab: target    1: auto attack    F / RMB: loot    B: backpack    C: character    Esc: close / clear    Wheel: zoom"), 11, Colors::TextDim);
 	Place(Root, HelpText, FAnchors(0.0f, 0.0f), FVector2D::ZeroVector, FVector2D(26.0f, 122.0f));
 
 	// hotbar, bottom-center
@@ -129,6 +136,36 @@ void UMMOHUDWidget::BuildDefaultLayout()
 	DeathBorder->SetVisibility(ESlateVisibility::Collapsed);
 	DeathOverlay = DeathBorder;
 	Fill(Root, DeathBorder);
+
+	// pickup feed and rare-drop banner
+	LootFeed = WidgetTree->ConstructWidget<UVerticalBox>(UVerticalBox::StaticClass(), TEXT("LootFeed"));
+	Place(Root, LootFeed, FAnchors(1.0f, 1.0f), FVector2D(1.0f, 1.0f), FVector2D(-28.0f, -120.0f));
+
+	RareLootBanner = MakeText(WidgetTree, TEXT(""), 26, MMOItems::GetRarityColor(EMMOItemRarity::Rare), true, ETextJustify::Center);
+	RareLootBanner->SetRenderTransformPivot(FVector2D(0.5f, 0.5f));
+	RareLootBanner->SetRenderOpacity(0.0f);
+	Place(Root, RareLootBanner, FAnchors(0.5f, 0.0f), FVector2D(0.5f, 0.0f), FVector2D(0.0f, 330.0f));
+
+	// everything above is display-only
+	for (UWidget* Child : Root->GetAllChildren())
+	{
+		Child->SetVisibility(Child->GetVisibility() == ESlateVisibility::Collapsed ? ESlateVisibility::Collapsed : ESlateVisibility::HitTestInvisible);
+	}
+
+	// windows (interactive)
+	CharacterWindow = WidgetTree->ConstructWidget<UMMOCharacterWindowWidget>(UMMOCharacterWindowWidget::StaticClass(), TEXT("CharacterWindow"));
+	Place(Root, CharacterWindow, FAnchors(0.0f, 0.5f), FVector2D(0.0f, 0.5f), FVector2D(24.0f, 40.0f));
+
+	InventoryWindow = WidgetTree->ConstructWidget<UMMOInventoryWindowWidget>(UMMOInventoryWindowWidget::StaticClass(), TEXT("InventoryWindow"));
+	Place(Root, InventoryWindow, FAnchors(1.0f, 0.5f), FVector2D(1.0f, 0.5f), FVector2D(-24.0f, 20.0f));
+
+	LootWindow = WidgetTree->ConstructWidget<UMMOLootWindowWidget>(UMMOLootWindowWidget::StaticClass(), TEXT("LootWindow"));
+	Place(Root, LootWindow, FAnchors(0.5f, 0.5f), FVector2D(1.0f, 0.5f), FVector2D(-90.0f, 0.0f));
+
+	for (UWidget* Window : { static_cast<UWidget*>(CharacterWindow), static_cast<UWidget*>(InventoryWindow), static_cast<UWidget*>(LootWindow) })
+	{
+		Window->SetVisibility(ESlateVisibility::Collapsed);
+	}
 }
 
 void UMMOHUDWidget::NativeConstruct()
@@ -148,6 +185,19 @@ void UMMOHUDWidget::NativeConstruct()
 	}
 
 	CombatEventHandle = UMMOHealthComponent::OnAnyCombatEvent.AddUObject(this, &UMMOHUDWidget::HandleAnyCombatEvent);
+
+	if (InventoryWindow)
+	{
+		InventoryWindow->OnCloseRequested.BindLambda([this]() { CloseWindowFromWidget(InventoryWindow); });
+	}
+	if (CharacterWindow)
+	{
+		CharacterWindow->OnCloseRequested.BindLambda([this]() { CloseWindowFromWidget(CharacterWindow); });
+	}
+	if (LootWindow)
+	{
+		LootWindow->OnCloseRequested.BindLambda([this]() { CloseWindowFromWidget(LootWindow); });
+	}
 }
 
 void UMMOHUDWidget::NativeDestruct()
@@ -171,6 +221,158 @@ void UMMOHUDWidget::NativeTick(const FGeometry& MyGeometry, float InDeltaTime)
 	UpdateFrames(Character);
 	UpdateFloatingTexts(InDeltaTime);
 	UpdateBanners(Character, InDeltaTime);
+	UpdateLootFeed(InDeltaTime);
+}
+
+void UMMOHUDWidget::SetInventoryOpen(bool bOpen)
+{
+	if (InventoryWindow)
+	{
+		if (bOpen)
+		{
+			InventoryWindow->Init(BoundCharacter.Get());
+			InventoryWindow->Refresh();
+		}
+		InventoryWindow->SetVisibility(bOpen ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
+	}
+}
+
+void UMMOHUDWidget::SetCharacterOpen(bool bOpen)
+{
+	if (CharacterWindow)
+	{
+		if (bOpen)
+		{
+			CharacterWindow->Init(BoundCharacter.Get());
+			CharacterWindow->Refresh();
+		}
+		CharacterWindow->SetVisibility(bOpen ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
+	}
+}
+
+void UMMOHUDWidget::OpenLoot(UMMOLootContainerComponent* Container)
+{
+	if (LootWindow && Container)
+	{
+		LootWindow->Open(BoundCharacter.Get(), Container);
+		LootWindow->SetVisibility(ESlateVisibility::Visible);
+	}
+}
+
+void UMMOHUDWidget::CloseLoot()
+{
+	if (LootWindow)
+	{
+		LootWindow->Close();
+		LootWindow->SetVisibility(ESlateVisibility::Collapsed);
+	}
+}
+
+bool UMMOHUDWidget::IsInventoryOpen() const
+{
+	return InventoryWindow && InventoryWindow->GetVisibility() == ESlateVisibility::Visible;
+}
+
+bool UMMOHUDWidget::IsCharacterOpen() const
+{
+	return CharacterWindow && CharacterWindow->GetVisibility() == ESlateVisibility::Visible;
+}
+
+bool UMMOHUDWidget::IsLootOpen() const
+{
+	return LootWindow && LootWindow->GetVisibility() == ESlateVisibility::Visible;
+}
+
+UMMOLootContainerComponent* UMMOHUDWidget::GetOpenLoot() const
+{
+	return IsLootOpen() ? LootWindow->GetContainer() : nullptr;
+}
+
+void UMMOHUDWidget::CloseWindowFromWidget(UWidget* Window)
+{
+	if (Window == LootWindow)
+	{
+		CloseLoot();
+	}
+	else if (Window)
+	{
+		Window->SetVisibility(ESlateVisibility::Collapsed);
+	}
+	OnWindowClosed.ExecuteIfBound();
+}
+
+void UMMOHUDWidget::AddLootFeedLine(const FString& Text, const FLinearColor& Color)
+{
+	if (!LootFeed || !WidgetTree)
+	{
+		return;
+	}
+
+	if (LootFeedEntries.Num() >= 6)
+	{
+		if (UTextBlock* Oldest = LootFeedEntries[0].Widget.Get())
+		{
+			Oldest->RemoveFromParent();
+		}
+		LootFeedEntries.RemoveAt(0);
+	}
+
+	UTextBlock* Line = MMOUI::MakeText(WidgetTree, Text, 15, Color, true, ETextJustify::Right);
+	LootFeed->AddChildToVerticalBox(Line)->SetHorizontalAlignment(HAlign_Right);
+
+	FLootFeedEntry& Entry = LootFeedEntries.AddDefaulted_GetRef();
+	Entry.Widget = Line;
+}
+
+void UMMOHUDWidget::UpdateLootFeed(float DeltaSeconds)
+{
+	for (int32 i = LootFeedEntries.Num() - 1; i >= 0; --i)
+	{
+		FLootFeedEntry& Entry = LootFeedEntries[i];
+		Entry.Age += DeltaSeconds;
+		UTextBlock* Line = Entry.Widget.Get();
+		if (!Line || Entry.Age > 4.5f)
+		{
+			if (Line)
+			{
+				Line->RemoveFromParent();
+			}
+			LootFeedEntries.RemoveAt(i);
+			continue;
+		}
+		Line->SetRenderOpacity(Entry.Age < 3.5f ? 1.0f : 1.0f - (Entry.Age - 3.5f));
+	}
+
+	if (RareLootBanner)
+	{
+		RareBannerTime = FMath::Max(0.0f, RareBannerTime - DeltaSeconds);
+		const float Elapsed = 3.0f - RareBannerTime;
+		RareLootBanner->SetRenderOpacity(RareBannerTime <= 0.0f ? 0.0f : FMath::Min(1.0f, RareBannerTime / 0.6f));
+		RareLootBanner->SetRenderScale(FVector2D(Elapsed < 0.2f ? 1.0f + (0.2f - Elapsed) * 1.5f : 1.0f));
+	}
+}
+
+void UMMOHUDWidget::HandleItemsReceived(UMMOItemDefinition* Item, int32 Quantity)
+{
+	if (!Item)
+	{
+		return;
+	}
+
+	const FLinearColor Color = MMOItems::GetRarityColor(Item->Rarity);
+	AddLootFeedLine(Quantity > 1 ? FString::Printf(TEXT("+ %s x%d"), *Item->DisplayName.ToString(), Quantity) : FString::Printf(TEXT("+ %s"), *Item->DisplayName.ToString()), Color);
+
+	if (Item->Rarity >= EMMOItemRarity::Rare && RareLootBanner)
+	{
+		RareLootBanner->SetText(FText::FromString(FString::Printf(TEXT("%s ITEM:  %s"), *MMOItems::GetRarityText(Item->Rarity).ToString().ToUpper(), *Item->DisplayName.ToString())));
+		RareLootBanner->SetColorAndOpacity(FSlateColor(Color));
+		RareBannerTime = 3.0f;
+	}
+}
+
+void UMMOHUDWidget::HandleCurrencyReceived(int32 Amount)
+{
+	AddLootFeedLine(FString::Printf(TEXT("+ %s"), *MMOItems::FormatCurrency(Amount)), MMOUI::Colors::Gold);
 }
 
 void UMMOHUDWidget::BindToCharacter(AMMOCharacter* Character)
@@ -187,6 +389,18 @@ void UMMOHUDWidget::BindToCharacter(AMMOCharacter* Character)
 	Character->GetProgression()->OnLevelUp.AddDynamic(this, &UMMOHUDWidget::HandleLevelUp);
 	Character->GetProgression()->OnXPChanged.AddDynamic(this, &UMMOHUDWidget::HandleXPChanged);
 	Character->GetHealth()->OnDamaged.AddDynamic(this, &UMMOHUDWidget::HandlePlayerDamaged);
+	Character->GetInventory()->OnItemsReceived.AddDynamic(this, &UMMOHUDWidget::HandleItemsReceived);
+	Character->GetInventory()->OnCurrencyReceived.AddDynamic(this, &UMMOHUDWidget::HandleCurrencyReceived);
+	Character->OnPlayerMessage.AddDynamic(this, &UMMOHUDWidget::HandleCombatError);
+
+	if (InventoryWindow)
+	{
+		InventoryWindow->Init(Character);
+	}
+	if (CharacterWindow)
+	{
+		CharacterWindow->Init(Character);
+	}
 }
 
 void UMMOHUDWidget::UnbindFromCharacter()
@@ -197,6 +411,9 @@ void UMMOHUDWidget::UnbindFromCharacter()
 		Character->GetProgression()->OnLevelUp.RemoveAll(this);
 		Character->GetProgression()->OnXPChanged.RemoveAll(this);
 		Character->GetHealth()->OnDamaged.RemoveAll(this);
+		Character->GetInventory()->OnItemsReceived.RemoveAll(this);
+		Character->GetInventory()->OnCurrencyReceived.RemoveAll(this);
+		Character->OnPlayerMessage.RemoveAll(this);
 	}
 	BoundCharacter.Reset();
 }

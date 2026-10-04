@@ -6,6 +6,8 @@
 #include "Combat/MMOCombatComponent.h"
 #include "Combat/MMOHealthComponent.h"
 #include "Combat/MMOProgressionComponent.h"
+#include "Items/MMOLootContainerComponent.h"
+#include "Items/MMOLootTable.h"
 #include "UI/MMONameplateWidget.h"
 #include "Animation/AnimMontage.h"
 #include "Components/CapsuleComponent.h"
@@ -103,7 +105,21 @@ AMMOCreature::AMMOCreature()
 	Nameplate->SetPivot(FVector2D(0.5f, 1.0f));
 	Nameplate->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 
+	Loot = CreateDefaultSubobject<UMMOLootContainerComponent>(TEXT("Loot"));
+
+	// gold diamond that bobs above lootable corpses
+	LootMarker = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("LootMarker"));
+	LootMarker->SetupAttachment(RootComponent);
+	LootMarker->SetStaticMesh(CubeMesh.Object);
+	LootMarker->SetMaterial(0, MMOCreature::GetTintableMaterial());
+	LootMarker->SetRelativeScale3D(FVector(0.16f));
+	LootMarker->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	LootMarker->SetCastShadow(false);
+	LootMarker->SetHiddenInGame(true);
+
 	DisplayName = NSLOCTEXT("MMOCreature", "DefaultName", "Creature");
+
+	LootTable = TSoftObjectPtr<UMMOLootTable>(FSoftObjectPath(TEXT("/Game/MMO/Loot/DA_Loot_GreyWolf.DA_Loot_GreyWolf")));
 
 	AttackImpactEffect = TSoftObjectPtr<UNiagaraSystem>(FSoftObjectPath(TEXT("/Game/Variant_Combat/VFX/NS_Damage.NS_Damage")));
 }
@@ -158,6 +174,14 @@ void AMMOCreature::BeginPlay()
 	LoadedAttackHitSound = AttackHitSound.LoadSynchronous();
 	LoadedDeathSound = DeathSound.LoadSynchronous();
 	LoadedAttackImpactEffect = AttackImpactEffect.LoadSynchronous();
+	LoadedLootTable = LootTable.LoadSynchronous();
+
+	Loot->ContainerName = DisplayName;
+	Loot->OnLootChanged.AddDynamic(this, &AMMOCreature::HandleLootChanged);
+	if (UMaterialInstanceDynamic* MarkerMaterial = LootMarker->CreateDynamicMaterialInstance(0))
+	{
+		MarkerMaterial->SetVectorParameterValue(MMOCreature::ColorParam, FLinearColor(1.0f, 0.72f, 0.1f));
+	}
 
 	Health->OnDamaged.AddDynamic(this, &AMMOCreature::HandleDamaged);
 	Health->OnDeath.AddDynamic(this, &AMMOCreature::HandleDeath);
@@ -190,6 +214,11 @@ UStaticMeshComponent* AMMOCreature::AddBodyPart(FName Name, UStaticMesh* PartMes
 bool AMMOCreature::UsesSkeletalMesh() const
 {
 	return GetMesh() && GetMesh()->GetSkeletalMeshAsset() != nullptr;
+}
+
+bool AMMOCreature::IsLootable() const
+{
+	return bIsDead && !IsHidden() && Loot->HasLoot();
 }
 
 bool AMMOCreature::IsTargetable() const
@@ -225,6 +254,7 @@ void AMMOCreature::Tick(float DeltaSeconds)
 
 	UpdateTargetIndicator(DeltaSeconds);
 	UpdateNameplate();
+	UpdateLootMarker();
 }
 
 bool AMMOCreature::CanAttack(const AActor* Target) const
@@ -394,17 +424,54 @@ void AMMOCreature::HandleDeath(AActor* Killer)
 		}
 	}
 
-	UE_LOG(LogMMO, Log, TEXT("%s died (killer: %s, XP reward: %d)"), *GetName(), *GetNameSafe(Killer), XPReward);
+	// this corpse rolls its own loot; nothing carries over from earlier deaths
+	DeathTime = GetWorld()->GetTimeSeconds();
+	Loot->GenerateFrom(LoadedLootTable);
 
-	GetWorldTimerManager().SetTimer(CorpseTimer, this, &AMMOCreature::HideCorpse, FMath::Max(0.01f, CorpseDuration), false);
-	GetWorldTimerManager().SetTimer(RespawnTimer, this, &AMMOCreature::Respawn, FMath::Max(CorpseDuration + 0.1f, RespawnDelay), false);
+	UE_LOG(LogMMO, Log, TEXT("%s died (killer: %s, XP reward: %d, loot stacks: %d, currency: %d)"), *GetName(), *GetNameSafe(Killer), XPReward, Loot->GetItems().Num(), Loot->GetCurrency());
+
+	ScheduleCorpseRemoval(Loot->HasLoot() ? LootableCorpseDuration : CorpseDuration);
+}
+
+void AMMOCreature::ScheduleCorpseRemoval(float Delay)
+{
+	Delay = FMath::Max(0.01f, Delay);
+	CorpseRemoveTime = GetWorld()->GetTimeSeconds() + Delay;
+	GetWorldTimerManager().SetTimer(CorpseTimer, this, &AMMOCreature::HideCorpse, Delay, false);
+}
+
+void AMMOCreature::HandleLootChanged()
+{
+	// fully looted: the corpse sinks away shortly instead of waiting out the lootable duration
+	if (bIsDead && !IsHidden() && !Loot->HasLoot() && CorpseRemoveTime - GetWorld()->GetTimeSeconds() > MMOCreature::CorpseSinkDuration + 0.2f)
+	{
+		ScheduleCorpseRemoval(MMOCreature::CorpseSinkDuration + 0.2f);
+	}
+}
+
+void AMMOCreature::UpdateLootMarker()
+{
+	const bool bShow = IsLootable();
+	LootMarker->SetHiddenInGame(!bShow);
+	if (bShow)
+	{
+		const float Bob = FMath::Sin(AnimTime * 3.0f) * 6.0f;
+		LootMarker->SetRelativeLocationAndRotation(FVector(0.0f, 0.0f, GetCapsuleComponent()->GetScaledCapsuleHalfHeight() + 20.0f + Bob), FRotator(45.0f, AnimTime * 90.0f, 45.0f));
+	}
 }
 
 void AMMOCreature::HideCorpse()
 {
+	// unlooted items are lost with the corpse (prototype rule)
+	Loot->ClearLoot();
+
 	SetActorHiddenInGame(true);
 	SetActorEnableCollision(false);
 	TargetIndicator->SetHiddenInGame(true, true);
+	LootMarker->SetHiddenInGame(true);
+
+	const float SinceDeath = static_cast<float>(GetWorld()->GetTimeSeconds() - DeathTime);
+	GetWorldTimerManager().SetTimer(RespawnTimer, this, &AMMOCreature::Respawn, FMath::Max(MinRespawnAfterCorpse, RespawnDelay - SinceDeath), false);
 }
 
 void AMMOCreature::Respawn()
@@ -414,6 +481,7 @@ void AMMOCreature::Respawn()
 	bIsDead = false;
 	DeathElapsed = 0.0f;
 	LastAttackTime = -1000.0;
+	Loot->ClearLoot();
 
 	Health->ResetHealth();
 	SetEvading(false);
@@ -524,10 +592,10 @@ void AMMOCreature::UpdateProceduralAnimation(float DeltaSeconds)
 		JawOpen = 12.0f * Fall;
 		LegSwing = 12.0f * Fall;
 
-		const float SinkStart = CorpseDuration - CorpseSinkDuration;
-		if (DeathElapsed > SinkStart)
+		const float UntilRemoved = static_cast<float>(CorpseRemoveTime - GetWorld()->GetTimeSeconds());
+		if (UntilRemoved < CorpseSinkDuration)
 		{
-			BodyOffset.Z -= 70.0f * FMath::Clamp((DeathElapsed - SinkStart) / CorpseSinkDuration, 0.0f, 1.0f);
+			BodyOffset.Z -= 70.0f * FMath::Clamp(1.0f - UntilRemoved / CorpseSinkDuration, 0.0f, 1.0f);
 		}
 	}
 
@@ -600,7 +668,7 @@ void AMMOCreature::UpdateNameplate()
 
 	if (UMMONameplateWidget* Widget = Cast<UMMONameplateWidget>(Nameplate->GetUserWidgetObject()))
 	{
-		Widget->SetNameplateState(DisplayName, CreatureLevel, Health->GetHealthPercent(), bTargeted, bIsDead, IsInCombat());
+		Widget->SetNameplateState(DisplayName, CreatureLevel, Health->GetHealthPercent(), bTargeted, bIsDead, IsInCombat(), IsLootable());
 	}
 }
 

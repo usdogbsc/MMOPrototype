@@ -14,6 +14,12 @@ class UCanvasPanel;
 class UTextBlock;
 class UImage;
 class UWidget;
+class UVerticalBox;
+class UMMOInventoryWindowWidget;
+class UMMOCharacterWindowWidget;
+class UMMOLootWindowWidget;
+class UMMOLootContainerComponent;
+class UMMOItemDefinition;
 
 /**
  *  Root MMO HUD: player frame, target frame, Basic Attack hotbar slot, floating combat text, banners and screen flashes.
@@ -33,6 +39,24 @@ public:
 	bool HasFrames() const { return PlayerFrame && TargetFrame; }
 
 	UMMOUnitFrameWidget* GetTargetFrame() const { return TargetFrame; }
+
+	/** Windows (managed by AMMOHUD, which also switches the mouse cursor on/off) */
+	void SetInventoryOpen(bool bOpen);
+	void SetCharacterOpen(bool bOpen);
+	void OpenLoot(UMMOLootContainerComponent* Container);
+	void CloseLoot();
+
+	bool IsInventoryOpen() const;
+	bool IsCharacterOpen() const;
+	bool IsLootOpen() const;
+	UMMOLootContainerComponent* GetOpenLoot() const;
+
+	UMMOInventoryWindowWidget* GetInventoryWindow() const { return InventoryWindow; }
+	UMMOCharacterWindowWidget* GetCharacterWindow() const { return CharacterWindow; }
+	UMMOLootWindowWidget* GetLootWindow() const { return LootWindow; }
+
+	/** Fired when a window closes itself (close button, loot emptied or out of reach) */
+	FSimpleDelegate OnWindowClosed;
 
 protected:
 
@@ -82,6 +106,32 @@ protected:
 	UPROPERTY(BlueprintReadOnly, Category="HUD", meta=(BindWidgetOptional))
 	TObjectPtr<UImage> LevelUpFlash;
 
+	UPROPERTY(BlueprintReadOnly, Category="HUD", meta=(BindWidgetOptional))
+	TObjectPtr<UMMOInventoryWindowWidget> InventoryWindow;
+
+	UPROPERTY(BlueprintReadOnly, Category="HUD", meta=(BindWidgetOptional))
+	TObjectPtr<UMMOCharacterWindowWidget> CharacterWindow;
+
+	UPROPERTY(BlueprintReadOnly, Category="HUD", meta=(BindWidgetOptional))
+	TObjectPtr<UMMOLootWindowWidget> LootWindow;
+
+	/** Recent pickups, bottom-right */
+	UPROPERTY(BlueprintReadOnly, Category="HUD", meta=(BindWidgetOptional))
+	TObjectPtr<UVerticalBox> LootFeed;
+
+	/** Larger notice for Rare and better drops */
+	UPROPERTY(BlueprintReadOnly, Category="HUD", meta=(BindWidgetOptional))
+	TObjectPtr<UTextBlock> RareLootBanner;
+
+	struct FLootFeedEntry
+	{
+		TWeakObjectPtr<UTextBlock> Widget;
+		float Age = 0.0f;
+	};
+
+	TArray<FLootFeedEntry> LootFeedEntries;
+	float RareBannerTime = 0.0f;
+
 	struct FFloatingText
 	{
 		TWeakObjectPtr<UTextBlock> Widget;
@@ -128,4 +178,14 @@ protected:
 
 	UFUNCTION()
 	void HandlePlayerDamaged(float Amount, AActor* DamageInstigator);
+
+	UFUNCTION()
+	void HandleItemsReceived(UMMOItemDefinition* Item, int32 Quantity);
+
+	UFUNCTION()
+	void HandleCurrencyReceived(int32 Amount);
+
+	void AddLootFeedLine(const FString& Text, const FLinearColor& Color);
+	void UpdateLootFeed(float DeltaSeconds);
+	void CloseWindowFromWidget(UWidget* Window);
 };
