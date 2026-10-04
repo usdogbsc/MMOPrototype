@@ -91,6 +91,16 @@ EMMOEquipResult UMMOEquipmentComponent::Unequip(EMMOEquipmentSlot Slot, UMMOInve
 	return EMMOEquipResult::Success;
 }
 
+void UMMOEquipmentComponent::ClearEquipment()
+{
+	EnsureSlots();
+	for (FMMOItemStack& Worn : Equipped)
+	{
+		Worn.Reset();
+	}
+	OnEquipmentChanged.Broadcast();
+}
+
 bool UMMOEquipmentComponent::EquipDirect(UMMOItemDefinition* Item)
 {
 	EnsureSlots();

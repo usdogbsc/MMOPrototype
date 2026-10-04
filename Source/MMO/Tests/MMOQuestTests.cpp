@@ -51,16 +51,16 @@ namespace MMOQuestTestUtils
 	}
 }
 
-using namespace MMOQuestTestUtils;
+namespace QT = MMOQuestTestUtils;
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FMMOQuestKillTest, "MMO.Quests.KillObjectiveAndPrerequisite",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 bool FMMOQuestKillTest::RunTest(const FString& Parameters)
 {
-	UMMOQuestDefinition* First = MakeQuest(TEXT("QT_KillFirst"), EMMOQuestObjectiveType::Kill, TEXT("QT_Wolf"), 3);
-	UMMOQuestDefinition* Second = MakeQuest(TEXT("QT_KillSecond"), EMMOQuestObjectiveType::Kill, TEXT("QT_Wolf"), 1, First);
-	UMMOQuestLogComponent* Log = MakeLog(MakeInventory(4));
+	UMMOQuestDefinition* First = QT::MakeQuest(TEXT("QT_KillFirst"), EMMOQuestObjectiveType::Kill, TEXT("QT_Wolf"), 3);
+	UMMOQuestDefinition* Second = QT::MakeQuest(TEXT("QT_KillSecond"), EMMOQuestObjectiveType::Kill, TEXT("QT_Wolf"), 1, First);
+	UMMOQuestLogComponent* Log = QT::MakeLog(QT::MakeInventory(4));
 
 	TestEqual(TEXT("First quest available"), Log->GetQuestState(First), EMMOQuestState::Available);
 	TestEqual(TEXT("Follow-up locked behind prerequisite"), Log->GetQuestState(Second), EMMOQuestState::Unavailable);
@@ -101,14 +101,14 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FMMOQuestCollectTest, "MMO.Quests.CollectAndRew
 
 bool FMMOQuestCollectTest::RunTest(const FString& Parameters)
 {
-	UMMOItemDefinition* Pelt = MakeItem(TEXT("QT_CollectPelt"), 20);
-	UMMOItemDefinition* Gloves = MakeItem(TEXT("QT_CollectGloves"), 1);
-	UMMOItemDefinition* Junk = MakeItem(TEXT("QT_CollectJunk"), 1);
-	UMMOQuestDefinition* Quest = MakeQuest(TEXT("QT_Collect"), EMMOQuestObjectiveType::Collect, TEXT("QT_CollectPelt"), 4);
+	UMMOItemDefinition* Pelt = QT::MakeItem(TEXT("QT_CollectPelt"), 20);
+	UMMOItemDefinition* Gloves = QT::MakeItem(TEXT("QT_CollectGloves"), 1);
+	UMMOItemDefinition* Junk = QT::MakeItem(TEXT("QT_CollectJunk"), 1);
+	UMMOQuestDefinition* Quest = QT::MakeQuest(TEXT("QT_Collect"), EMMOQuestObjectiveType::Collect, TEXT("QT_CollectPelt"), 4);
 	Quest->RewardItems.Add({ Gloves, 1 });
 
-	UMMOInventoryComponent* Inventory = MakeInventory(3);
-	UMMOQuestLogComponent* Log = MakeLog(Inventory);
+	UMMOInventoryComponent* Inventory = QT::MakeInventory(3);
+	UMMOQuestLogComponent* Log = QT::MakeLog(Inventory);
 
 	Inventory->AddItem(Pelt, 2);
 	TestEqual(TEXT("Accept"), Log->AcceptQuest(Quest), EMMOQuestResult::Success);
@@ -144,14 +144,14 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FMMOQuestDiscoverAbandonRestoreTest, "MMO.Quest
 
 bool FMMOQuestDiscoverAbandonRestoreTest::RunTest(const FString& Parameters)
 {
-	UMMOQuestDefinition* Scout = MakeQuest(TEXT("QT_Scout"), EMMOQuestObjectiveType::Discover, TEXT("QT_Tower"), 1);
+	UMMOQuestDefinition* Scout = QT::MakeQuest(TEXT("QT_Scout"), EMMOQuestObjectiveType::Discover, TEXT("QT_Tower"), 1);
 	FMMOQuestObjective& Second = Scout->Objectives.AddDefaulted_GetRef();
 	Second.Type = EMMOQuestObjectiveType::Discover;
 	Second.TargetId = TEXT("QT_Woods");
 	Second.Count = 1;
-	UMMOQuestDefinition* Hunt = MakeQuest(TEXT("QT_Hunt"), EMMOQuestObjectiveType::Kill, TEXT("QT_Boar"), 5);
+	UMMOQuestDefinition* Hunt = QT::MakeQuest(TEXT("QT_Hunt"), EMMOQuestObjectiveType::Kill, TEXT("QT_Boar"), 5);
 
-	UMMOQuestLogComponent* Log = MakeLog(MakeInventory(2));
+	UMMOQuestLogComponent* Log = QT::MakeLog(QT::MakeInventory(2));
 	Log->AcceptQuest(Scout);
 	Log->NotifyDiscovered(TEXT("QT_Tower"));
 	TestEqual(TEXT("First place scouted"), Log->GetObjectiveProgress(Scout, 0), 1);
@@ -179,7 +179,7 @@ bool FMMOQuestDiscoverAbandonRestoreTest::RunTest(const FString& Parameters)
 
 	// the log has a size limit
 	Log->MaxActiveQuests = 1;
-	UMMOQuestDefinition* Extra = MakeQuest(TEXT("QT_Extra"), EMMOQuestObjectiveType::Kill, TEXT("QT_Boar"), 1);
+	UMMOQuestDefinition* Extra = QT::MakeQuest(TEXT("QT_Extra"), EMMOQuestObjectiveType::Kill, TEXT("QT_Boar"), 1);
 	TestEqual(TEXT("Log full"), Log->AcceptQuest(Extra), EMMOQuestResult::LogFull);
 	return true;
 }

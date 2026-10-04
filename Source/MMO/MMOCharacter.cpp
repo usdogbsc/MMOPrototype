@@ -26,6 +26,8 @@
 #include "World/MMOExplorationComponent.h"
 #include "World/MMOInteractable.h"
 #include "Quests/MMOQuestLogComponent.h"
+#include "Save/MMOSaveSubsystem.h"
+#include "Engine/GameInstance.h"
 #include "Components/StaticMeshComponent.h"
 #include "EngineUtils.h"
 #include "Materials/MaterialInstanceDynamic.h"
@@ -159,6 +161,14 @@ void AMMOCharacter::BeginPlay()
 	Combat->OnAutoAttackChanged.AddDynamic(this, &AMMOCharacter::HandleAutoAttackChanged);
 
 	GetWorldTimerManager().SetTimer(RegenTimer, this, &AMMOCharacter::TickRegeneration, 0.5f, true);
+
+	// persistence: load once possessed, then autosave on a timer and soon after important events
+	GetWorldTimerManager().SetTimerForNextTick(this, &AMMOCharacter::LoadSavedGame);
+	GetWorldTimerManager().SetTimer(SaveTimer, this, &AMMOCharacter::TickAutoSave, 2.0f, true);
+	Progression->OnLevelUp.AddDynamic(this, &AMMOCharacter::HandleLevelUpForSave);
+	QuestLog->OnQuestLogChanged.AddDynamic(this, &AMMOCharacter::RequestSave);
+	Equipment->OnEquipmentChanged.AddDynamic(this, &AMMOCharacter::RequestSave);
+	Exploration->OnLocationDiscovered.AddDynamic(this, &AMMOCharacter::HandleLocationDiscoveredForSave);
 
 	// MMO camera: a little higher and further back than the template, with smooth follow and wheel zoom
 	CameraMaxDistance = FMath::Max(CameraMaxDistance, CameraMinDistance);
@@ -928,6 +938,80 @@ void AMMOCharacter::DoToggleCharacter()
 	{
 		HUD->ToggleCharacter();
 	}
+}
+
+void AMMOCharacter::LoadSavedGame()
+{
+	UMMOSaveSubsystem* Saves = GetGameInstance() ? GetGameInstance()->GetSubsystem<UMMOSaveSubsystem>() : nullptr;
+	if (!Saves || !IsPlayerControlled() || !Saves->IsPersistenceEnabled())
+	{
+		return;
+	}
+	Saves->BeginCharacterSession();
+
+	if (!Saves->HasSave())
+	{
+		bSaveReady = true;
+		UE_LOG(LogMMO, Log, TEXT("No saved character yet; starting fresh"));
+		return;
+	}
+	bSaveReady = Saves->LoadCharacter(this);
+	if (!bSaveReady)
+	{
+		UE_LOG(LogMMO, Warning, TEXT("The saved character could not be loaded; autosave is off this session so it isn't overwritten"));
+	}
+	LastSaveTime = GetWorld()->GetTimeSeconds();
+}
+
+void AMMOCharacter::RefreshAfterLoad(float SavedHealth)
+{
+	RecalculateStats(false);
+	RefreshEquipmentVisuals();
+	Health->RestoreHealth(SavedHealth > 0.0f ? SavedHealth : Health->GetMaxHealth());
+	Combat->ClearTarget();
+}
+
+void AMMOCharacter::RequestSave()
+{
+	bSaveRequested = true;
+}
+
+void AMMOCharacter::HandleLevelUpForSave(int32 NewLevel)
+{
+	RequestSave();
+}
+
+void AMMOCharacter::HandleLocationDiscoveredForSave(AMMODiscoveryZone* Zone, int32 XPAwarded)
+{
+	RequestSave();
+}
+
+void AMMOCharacter::TickAutoSave()
+{
+	const double Now = GetWorld()->GetTimeSeconds();
+	if (bSaveReady && (bSaveRequested || Now - LastSaveTime >= AutoSaveInterval))
+	{
+		SaveNow();
+	}
+}
+
+bool AMMOCharacter::SaveNow()
+{
+	UMMOSaveSubsystem* Saves = GetGameInstance() ? GetGameInstance()->GetSubsystem<UMMOSaveSubsystem>() : nullptr;
+	if (!bSaveReady || !Saves || !Saves->IsPersistenceEnabled())
+	{
+		return false;
+	}
+	bSaveRequested = false;
+	LastSaveTime = GetWorld()->GetTimeSeconds();
+	return Saves->SaveCharacter(this);
+}
+
+void AMMOCharacter::EndPlay(const EEndPlayReason::Type EndPlayReason)
+{
+	// leaving the game (or the map) keeps progress
+	SaveNow();
+	Super::EndPlay(EndPlayReason);
 }
 
 void AMMOCharacter::DoToggleQuestLog()

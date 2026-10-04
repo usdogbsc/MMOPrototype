@@ -190,6 +190,10 @@ protected:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Combat|Death", meta=(ClampMin=0, Units="s"))
 	float RespawnDelay = 5.0f;
 
+	/** Seconds between autosaves (important events such as quest turn-ins and level ups save within a few seconds) */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Save", meta=(ClampMin=5, Units="s"))
+	float AutoSaveInterval = 30.0f;
+
 	/** Camera distance at spawn */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Camera", meta=(ClampMin=0, Units="cm"))
 	float CameraDefaultDistance = 550.0f;
@@ -295,6 +299,12 @@ protected:
 
 	FTimerHandle RegenTimer;
 	FTimerHandle RespawnTimer;
+	FTimerHandle SaveTimer;
+
+	/** Saving starts once the saved game (if any) has been loaded, so a failed load never overwrites it */
+	bool bSaveReady = false;
+	bool bSaveRequested = false;
+	double LastSaveTime = 0.0;
 
 public:
 
@@ -349,6 +359,24 @@ protected:
 	void HandleAutoAttackChanged(bool bActive);
 
 	void TickRegeneration();
+
+	/** Loads the local save (next tick after BeginPlay, once the controller is set) */
+	void LoadSavedGame();
+
+	/** Saves now if a save was requested or the autosave interval passed */
+	void TickAutoSave();
+
+	/** Marks the character as needing a save soon */
+	UFUNCTION()
+	void RequestSave();
+
+	UFUNCTION()
+	void HandleLocationDiscoveredForSave(class AMMODiscoveryZone* Zone, int32 XPAwarded);
+
+	UFUNCTION()
+	void HandleLevelUpForSave(int32 NewLevel);
+
+	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
 	/** Mouse wheel zoom input */
 	void Zoom(const FInputActionValue& Value);
@@ -489,6 +517,12 @@ public:
 
 	/** Seconds between death and respawn */
 	float GetRespawnDelay() const { return RespawnDelay; }
+
+	/** Re-derives stats and visuals after a save game was applied, then sets health */
+	void RefreshAfterLoad(float SavedHealth);
+
+	/** Writes the local save immediately (if saving is enabled). Returns true if written */
+	bool SaveNow();
 
 public:
 

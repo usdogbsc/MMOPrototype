@@ -62,6 +62,9 @@ public:
 	UFUNCTION(BlueprintCallable, Category="Progression")
 	void ResetProgression();
 
+	/** Sets level and XP directly (save games). Clamped to valid values; broadcasts OnXPChanged with no gain */
+	void RestoreProgress(int32 InLevel, int32 InXP);
+
 	/** Adds XP, levelling up as many times as needed and carrying overflow. Returns the number of levels gained */
 	UFUNCTION(BlueprintCallable, Category="Progression")
 	int32 AddXP(int32 Amount);

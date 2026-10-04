@@ -175,4 +175,15 @@ static FAutoConsoleCommandWithWorldAndArgs GMMOTourCommand(TEXT("mmo.tour"), TEX
 static FAutoConsoleCommandWithWorldAndArgs GMMOGotoCommand(TEXT("mmo.goto"), TEXT("mmo.goto <Place>: teleport to a zone viewpoint."),
 	FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&MMOZoneTour::GoToCommand));
 
+static FAutoConsoleCommand GMMOQuitAfterCommand(TEXT("mmo.quitafter"), TEXT("mmo.quitafter <seconds>: exits the game cleanly after a delay (for scripted test sessions)."),
+	FConsoleCommandWithArgsDelegate::CreateLambda([](const TArray<FString>& Args)
+	{
+		const float Delay = Args.Num() > 0 ? FCString::Atof(*Args[0]) : 5.0f;
+		FTSTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateLambda([](float)
+		{
+			FPlatformMisc::RequestExit(false, TEXT("mmo.quitafter"));
+			return false;
+		}), Delay);
+	}));
+
 #endif // !UE_BUILD_SHIPPING

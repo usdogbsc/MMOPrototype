@@ -67,6 +67,9 @@ public:
 	/** Equips an item that does not come from an inventory (starting gear). Fails if the slot is occupied */
 	bool EquipDirect(UMMOItemDefinition* Item);
 
+	/** Empties every slot without giving the items anywhere (save games) */
+	void ClearEquipment();
+
 	const FMMOItemStack& GetEquipped(EMMOEquipmentSlot Slot) const;
 
 	/** Sum of all worn items' stat modifiers */

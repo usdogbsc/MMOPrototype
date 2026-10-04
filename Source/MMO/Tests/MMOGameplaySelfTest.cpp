@@ -40,6 +40,9 @@
 #include "World/MMODiscoveryZone.h"
 #include "World/MMOExplorationComponent.h"
 #include "NPC/MMONPC.h"
+#include "Save/MMOSaveGame.h"
+#include "Save/MMOSaveSubsystem.h"
+#include "Engine/GameInstance.h"
 #include "Quests/MMOQuestDefinition.h"
 #include "Quests/MMOQuestLogComponent.h"
 #include "UI/MMONPCPlateWidget.h"
@@ -968,8 +971,9 @@ namespace MMOSelfTest
 			if (!Hollis)
 			{
 				UE_LOG(LogMMO, Display, TEXT("MMO SELFTEST: no villagers in this map, skipping the quest checks"));
-				Finish();
-				return false;
+				State->Step = 35;
+				State->StepStart = Now();
+				break;
 			}
 			UMMOQuestLogComponent* QuestLog = Player->GetQuestLog();
 			UMMOQuestDefinition* Wolves = UMMOQuestDefinition::FindById(TEXT("WolvesAtTheGate"));
@@ -1135,10 +1139,85 @@ namespace MMOSelfTest
 			if (Elapsed() > 0.5f)
 			{
 				Check(!HUDOf(Player)->GetHUDWidget()->IsDialogueOpen(), TEXT("Walking away closes the conversation"));
+				NextStep();
+			}
+			break;
+
+		case 35: // save, scramble everything, load: the character comes back exactly as it was (Milestone 5)
+		{
+			UMMOSaveSubsystem* Saves = World->GetGameInstance()->GetSubsystem<UMMOSaveSubsystem>();
+			Check(Saves && !Saves->IsPersistenceEnabled(), TEXT("Autosave is off during the self-test (real progress is never overwritten)"));
+			if (!Saves)
+			{
 				Finish();
 				return false;
 			}
-			break;
+			const FString Slot = TEXT("MMO_SelfTest");
+			Saves->DeleteSave(Slot);
+
+			// give the character something worth saving in every category
+			UMMOQuestLogComponent* QuestLog = Player->GetQuestLog();
+			if (UMMOQuestDefinition* Fangs = UMMOQuestDefinition::FindById(TEXT("FangsForTheForge")))
+			{
+				QuestLog->AcceptQuest(Fangs);
+			}
+			if (UMMOQuestDefinition* Eyes = UMMOQuestDefinition::FindById(TEXT("EyesOnTheWild")))
+			{
+				QuestLog->AcceptQuest(Eyes);
+			}
+			Inventory->AddItem(WolfFang, 3);
+			Progression->AddXP(7);
+			PlayerHealth->ApplyDamage(15.0f, nullptr);
+
+			const UMMOSaveGame* Before = UMMOSaveSubsystem::Capture(Player, GetTransientPackage());
+			const FVector Location = Player->GetActorLocation();
+			const float HealthBefore = PlayerHealth->GetCurrentHealth();
+			const float ArmorBefore = PlayerHealth->GetArmor();
+			const int32 Owned = CountOwned(Player);
+			Check(Before->Inventory.Num() > 0 && Before->Equipment.Num() > 0 && Before->ActiveQuests.Num() + Before->CompletedQuests.Num() > 0 && (Before->Discovered.Num() > 0 || !State->bHasZones),
+				TEXT("Character has items, gear, quests and discoveries to save"));
+			Check(Saves->SaveCharacter(Player, Slot) && Saves->HasSave(Slot), TEXT("Character saves to a slot on disk"));
+
+			// scramble
+			Inventory->ClearInventory();
+			Inventory->SetCurrency(0);
+			Equipment->ClearEquipment();
+			Progression->ResetProgression();
+			QuestLog->RestoreState({}, {});
+			Player->GetExploration()->RestoreDiscovered({});
+			PlacePlayerNear(Location, 2500.0f);
+			Check(CountOwned(Player) == 0 && Progression->GetLevel() == 1, TEXT("Character wiped before loading"));
+
+			Check(Saves->LoadCharacter(Player, Slot), TEXT("Character loads from the slot"));
+			const UMMOSaveGame* After = UMMOSaveSubsystem::Capture(Player, GetTransientPackage());
+			Check(After->Level == Before->Level && After->XP == Before->XP, FString::Printf(TEXT("Level and XP restored (level %d, %d XP)"), After->Level, After->XP));
+			Check(After->Currency == Before->Currency && CountOwned(Player) == Owned, TEXT("Currency and every item restored"));
+			bool bSameSlots = After->Inventory.Num() == Before->Inventory.Num();
+			for (int32 i = 0; bSameSlots && i < Before->Inventory.Num(); ++i)
+			{
+				bSameSlots = After->Inventory[i].ItemId == Before->Inventory[i].ItemId && After->Inventory[i].Quantity == Before->Inventory[i].Quantity && After->Inventory[i].Slot == Before->Inventory[i].Slot;
+			}
+			Check(bSameSlots, TEXT("Backpack layout restored slot for slot"));
+			bool bSameGear = After->Equipment.Num() == Before->Equipment.Num();
+			for (int32 i = 0; bSameGear && i < Before->Equipment.Num(); ++i)
+			{
+				bSameGear = After->Equipment[i].ItemId == Before->Equipment[i].ItemId && After->Equipment[i].Slot == Before->Equipment[i].Slot;
+			}
+			Check(bSameGear && FMath::IsNearlyEqual(PlayerHealth->GetArmor(), ArmorBefore), TEXT("Worn gear and its stats restored"));
+			Check(FMath::IsNearlyEqual(PlayerHealth->GetCurrentHealth(), HealthBefore, 0.5f), TEXT("Current health restored"));
+			bool bSameQuests = After->ActiveQuests.Num() == Before->ActiveQuests.Num() && TSet<FName>(After->CompletedQuests).Includes(TSet<FName>(Before->CompletedQuests)) && After->CompletedQuests.Num() == Before->CompletedQuests.Num();
+			for (int32 i = 0; bSameQuests && i < Before->ActiveQuests.Num(); ++i)
+			{
+				bSameQuests = After->ActiveQuests[i].QuestId == Before->ActiveQuests[i].QuestId && After->ActiveQuests[i].Counts == Before->ActiveQuests[i].Counts;
+			}
+			Check(bSameQuests, TEXT("Active quests (with progress) and completed quests restored"));
+			Check(TSet<FName>(After->Discovered).Num() == Before->Discovered.Num() && TSet<FName>(After->Discovered).Includes(TSet<FName>(Before->Discovered)), TEXT("Discovered places restored"));
+			Check(FVector::Dist(Player->GetActorLocation(), Location) < 60.0f, TEXT("Position restored"));
+
+			Check(Saves->DeleteSave(Slot) && !Saves->HasSave(Slot), TEXT("Save slot can be deleted"));
+			Finish();
+			return false;
+		}
 		}
 
 		return true;
@@ -1158,6 +1237,16 @@ namespace MMOSelfTest
 		State->bScreenshots = Args.Contains(TEXT("shots"));
 		State->Player = Cast<AMMOCharacter>(UGameplayStatics::GetPlayerPawn(World, 0));
 		State->SafeOrigin = State->Player.IsValid() ? State->Player->GetActorLocation() : FVector::ZeroVector;
+
+		// never let test actions reach the player's real save
+		if (UMMOSaveSubsystem* Saves = World->GetGameInstance() ? World->GetGameInstance()->GetSubsystem<UMMOSaveSubsystem>() : nullptr)
+		{
+			if (Saves->IsPersistenceEnabled())
+			{
+				UE_LOG(LogMMO, Warning, TEXT("MMO SELFTEST: saving is turned off for the rest of this session. Launch with -MMONoSave for a fresh level-1 character."));
+			}
+			Saves->DisablePersistence();
+		}
 
 		// deterministic loot: only the drops the test forces (random rolls are covered by MMO.Items automation tests)
 		if (IConsoleVariable* LootChance = IConsoleManager::Get().FindConsoleVariable(TEXT("mmo.Loot.ChanceMultiplier")))

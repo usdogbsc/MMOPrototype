@@ -59,6 +59,11 @@ public:
 	UFUNCTION(BlueprintPure, Category="Exploration")
 	AMMODiscoveryZone* GetCurrentZone() const { return CurrentZone.Get(); }
 
+	const TSet<FName>& GetDiscovered() const { return Discovered; }
+
+	/** Replaces the discovered set (save games). Doesn't award XP or show banners */
+	void RestoreDiscovered(const TSet<FName>& InDiscovered) { Discovered = InDiscovered; }
+
 	/** Re-evaluates the current zone immediately (also runs every tick) */
 	void UpdateZone();
 

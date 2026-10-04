@@ -21,6 +21,13 @@ void UMMOProgressionComponent::ResetProgression()
 	CurrentXP = 0;
 }
 
+void UMMOProgressionComponent::RestoreProgress(int32 InLevel, int32 InXP)
+{
+	Level = FMath::Clamp(InLevel, 1, MaxLevel);
+	CurrentXP = IsMaxLevel() ? 0 : FMath::Clamp(InXP, 0, GetXPToNextLevel() - 1);
+	OnXPChanged.Broadcast(CurrentXP, GetXPToNextLevel(), 0);
+}
+
 int32 UMMOProgressionComponent::AddXP(int32 Amount)
 {
 	if (Amount <= 0 || IsMaxLevel())

@@ -77,6 +77,9 @@ public:
 
 	void ClearInventory();
 
+	/** Sets the purse directly (save games) */
+	void SetCurrency(int32 Amount);
+
 	int32 CountItem(const UMMOItemDefinition* Item) const;
 	int32 GetFreeSlotCount() const;
 	int32 FindFirstEmptySlot() const;

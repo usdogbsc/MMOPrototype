@@ -75,6 +75,12 @@ void UMMOHealthComponent::SetMaxHealth(float NewMaxHealth, bool bFillToMax)
 	BroadcastHealthChanged();
 }
 
+void UMMOHealthComponent::RestoreHealth(float NewHealth)
+{
+	CurrentHealth = FMath::Clamp(NewHealth, FMath::Min(1.0f, MaxHealth), MaxHealth);
+	BroadcastHealthChanged();
+}
+
 void UMMOHealthComponent::ResetHealth()
 {
 	CurrentHealth = MaxHealth;

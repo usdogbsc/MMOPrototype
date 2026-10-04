@@ -92,6 +92,9 @@ public:
 	UFUNCTION(BlueprintCallable, Category="Health")
 	void ResetHealth();
 
+	/** Sets current health directly (save games), clamped to (0, MaxHealth] so it never kills */
+	void RestoreHealth(float NewHealth);
+
 	UFUNCTION(BlueprintCallable, Category="Health")
 	void SetInvulnerable(bool bNewInvulnerable) { bInvulnerable = bNewInvulnerable; }
 

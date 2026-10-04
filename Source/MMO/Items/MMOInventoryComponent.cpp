@@ -275,6 +275,12 @@ void UMMOInventoryComponent::ClearInventory()
 	BroadcastChanged();
 }
 
+void UMMOInventoryComponent::SetCurrency(int32 Amount)
+{
+	Currency = FMath::Max(0, Amount);
+	BroadcastChanged();
+}
+
 int32 UMMOInventoryComponent::CountItem(const UMMOItemDefinition* Item) const
 {
 	int32 Count = 0;
