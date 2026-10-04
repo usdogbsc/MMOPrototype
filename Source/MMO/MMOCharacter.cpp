@@ -10,6 +10,15 @@
 #include "EnhancedInputComponent.h"
 #include "EnhancedInputSubsystems.h"
 #include "InputActionValue.h"
+#include "InputAction.h"
+#include "InputMappingContext.h"
+#include "Animation/AnimInstance.h"
+#include "Animation/AnimSequenceBase.h"
+#include "Combat/MMOHealthComponent.h"
+#include "Combat/MMOProgressionComponent.h"
+#include "Combat/MMOCombatComponent.h"
+#include "TimerManager.h"
+#include "UObject/ConstructorHelpers.h"
 #include "MMO.h"
 
 AMMOCharacter::AMMOCharacter()
@@ -46,14 +55,55 @@ AMMOCharacter::AMMOCharacter()
 	FollowCamera->SetupAttachment(CameraBoom, USpringArmComponent::SocketName);
 	FollowCamera->bUsePawnControlRotation = false;
 
+	// Combat, progression and health
+	Health = CreateDefaultSubobject<UMMOHealthComponent>(TEXT("Health"));
+	Health->MaxHealth = 100.0f;
+
+	Progression = CreateDefaultSubobject<UMMOProgressionComponent>(TEXT("Progression"));
+
+	Combat = CreateDefaultSubobject<UMMOCombatComponent>(TEXT("Combat"));
+
+	// default attack swing from the shared mannequin animations. Can be overridden in the Blueprint
+	static ConstructorHelpers::FObjectFinder<UAnimSequenceBase> AttackAnim(TEXT("/Game/Characters/Mannequins/Anims/Unarmed/Attack/MM_Attack_01.MM_Attack_01"));
+	if (AttackAnim.Succeeded())
+	{
+		BasicAttackAnimation = AttackAnim.Object;
+	}
+
 	// Note: The skeletal mesh and anim blueprint references on the Mesh component (inherited from Character) 
 	// are set in the derived blueprint asset named ThirdPersonCharacter (to avoid direct content references in C++)
+}
+
+void AMMOCharacter::BeginPlay()
+{
+	Super::BeginPlay();
+
+	BaseMaxHealth = Health->GetMaxHealth();
+	BaseAttackDamage = Combat->BasicAttackDamage;
+	RespawnTransform = GetActorTransform();
+	MeshRelativeTransform = GetMesh()->GetRelativeTransform();
+	MeshCollisionProfile = GetMesh()->GetCollisionProfileName();
+
+	ApplyLevelStats(Progression->GetLevel(), true);
+
+	Health->OnDamaged.AddDynamic(this, &AMMOCharacter::HandleDamaged);
+	Health->OnDeath.AddDynamic(this, &AMMOCharacter::HandleDeath);
+	Progression->OnLevelUp.AddDynamic(this, &AMMOCharacter::HandleLevelUp);
+	Combat->OnBasicAttack.AddDynamic(this, &AMMOCharacter::HandleBasicAttack);
+
+	GetWorldTimerManager().SetTimer(RegenTimer, this, &AMMOCharacter::TickRegeneration, 0.5f, true);
 }
 
 void AMMOCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputComponent)
 {
 	// Set up action bindings
 	if (UEnhancedInputComponent* EnhancedInputComponent = Cast<UEnhancedInputComponent>(PlayerInputComponent)) {
+
+		// Combat
+		CreateDefaultCombatInput();
+		EnhancedInputComponent->BindAction(TargetAction, ETriggerEvent::Started, this, &AMMOCharacter::DoTarget);
+		EnhancedInputComponent->BindAction(CycleTargetAction, ETriggerEvent::Started, this, &AMMOCharacter::DoCycleTarget);
+		EnhancedInputComponent->BindAction(BasicAttackAction, ETriggerEvent::Started, this, &AMMOCharacter::DoBasicAttack);
 		
 		// Jumping
 		EnhancedInputComponent->BindAction(JumpAction, ETriggerEvent::Started, this, &ACharacter::Jump);
@@ -130,4 +180,176 @@ void AMMOCharacter::DoJumpEnd()
 {
 	// signal the character to stop jumping
 	StopJumping();
+}
+
+void AMMOCharacter::CreateDefaultCombatInput()
+{
+	// Runtime defaults keep the milestone playable without authoring new input assets.
+	// Assign real Input Action / Mapping Context assets in the Blueprint to override these.
+	const bool bCreateContext = CombatMappingContext == nullptr;
+	if (bCreateContext)
+	{
+		CombatMappingContext = NewObject<UInputMappingContext>(this, TEXT("IMC_MMOCombat_Runtime"));
+	}
+
+	auto EnsureAction = [this, bCreateContext](TObjectPtr<UInputAction>& Action, const TCHAR* Name, const FKey& Key)
+	{
+		if (!Action)
+		{
+			Action = NewObject<UInputAction>(this, Name);
+			Action->ValueType = EInputActionValueType::Boolean;
+		}
+		if (bCreateContext)
+		{
+			CombatMappingContext->MapKey(Action, Key);
+		}
+	};
+
+	EnsureAction(TargetAction, TEXT("IA_MMOTarget_Runtime"), EKeys::LeftMouseButton);
+	EnsureAction(CycleTargetAction, TEXT("IA_MMOCycleTarget_Runtime"), EKeys::Tab);
+	EnsureAction(BasicAttackAction, TEXT("IA_MMOBasicAttack_Runtime"), EKeys::One);
+
+	if (const APlayerController* PC = Cast<APlayerController>(GetController()))
+	{
+		if (UEnhancedInputLocalPlayerSubsystem* Subsystem = ULocalPlayer::GetSubsystem<UEnhancedInputLocalPlayerSubsystem>(PC->GetLocalPlayer()))
+		{
+			if (!Subsystem->HasMappingContext(CombatMappingContext))
+			{
+				Subsystem->AddMappingContext(CombatMappingContext, 1);
+			}
+		}
+	}
+}
+
+void AMMOCharacter::DoTarget()
+{
+	if (!IsDead())
+	{
+		Combat->TargetFromView();
+	}
+}
+
+void AMMOCharacter::DoCycleTarget()
+{
+	if (!IsDead())
+	{
+		Combat->CycleTarget();
+	}
+}
+
+void AMMOCharacter::DoBasicAttack()
+{
+	if (!IsDead())
+	{
+		Combat->TryBasicAttack();
+	}
+}
+
+bool AMMOCharacter::IsDead() const
+{
+	return Health && Health->IsDead();
+}
+
+float AMMOCharacter::GetRespawnTimeRemaining() const
+{
+	if (!IsDead() || !GetWorld())
+	{
+		return 0.0f;
+	}
+	return FMath::Max(0.0f, static_cast<float>(RespawnTime - GetWorld()->GetTimeSeconds()));
+}
+
+void AMMOCharacter::ApplyLevelStats(int32 Level, bool bFillHealth)
+{
+	const int32 LevelsAboveFirst = FMath::Max(0, Level - 1);
+	Health->SetMaxHealth(BaseMaxHealth + MaxHealthPerLevel * LevelsAboveFirst, bFillHealth);
+	Combat->BasicAttackDamage = BaseAttackDamage + AttackDamagePerLevel * LevelsAboveFirst;
+}
+
+void AMMOCharacter::HandleLevelUp(int32 NewLevel)
+{
+	// levelling up fully heals: a classic, satisfying reward that also keeps the test loop moving
+	ApplyLevelStats(NewLevel, true);
+
+	UE_LOG(LogMMO, Log, TEXT("Player reached level %d (Max Health %.0f, Basic Attack %.0f)"), NewLevel, Health->GetMaxHealth(), Combat->BasicAttackDamage);
+}
+
+void AMMOCharacter::HandleDamaged(float Amount, AActor* DamageInstigator)
+{
+	LastDamageTakenTime = GetWorld()->GetTimeSeconds();
+}
+
+void AMMOCharacter::HandleDeath(AActor* Killer)
+{
+	UE_LOG(LogMMO, Log, TEXT("Player was killed by %s"), *GetNameSafe(Killer));
+
+	Combat->ClearTarget();
+
+	if (APlayerController* PC = Cast<APlayerController>(GetController()))
+	{
+		DisableInput(PC);
+	}
+
+	GetCharacterMovement()->StopMovementImmediately();
+	GetCharacterMovement()->DisableMovement();
+
+	// collapse into a ragdoll
+	GetMesh()->SetCollisionProfileName(TEXT("Ragdoll"));
+	GetMesh()->SetSimulatePhysics(true);
+
+	RespawnTime = GetWorld()->GetTimeSeconds() + RespawnDelay;
+	GetWorldTimerManager().SetTimer(RespawnTimer, this, &AMMOCharacter::RespawnPlayer, FMath::Max(0.1f, RespawnDelay), false);
+}
+
+void AMMOCharacter::RespawnPlayer()
+{
+	// restore the mesh from ragdoll
+	GetMesh()->SetSimulatePhysics(false);
+	GetMesh()->SetCollisionProfileName(MeshCollisionProfile);
+	GetMesh()->AttachToComponent(GetCapsuleComponent(), FAttachmentTransformRules::SnapToTargetNotIncludingScale);
+	GetMesh()->SetRelativeTransform(MeshRelativeTransform);
+
+	TeleportTo(RespawnTransform.GetLocation(), RespawnTransform.Rotator(), false, true);
+	if (AController* PlayerController = GetController())
+	{
+		PlayerController->SetControlRotation(RespawnTransform.Rotator());
+	}
+
+	Health->ResetHealth();
+	GetCharacterMovement()->SetMovementMode(MOVE_Walking);
+
+	if (APlayerController* PC = Cast<APlayerController>(GetController()))
+	{
+		EnableInput(PC);
+	}
+
+	UE_LOG(LogMMO, Log, TEXT("Player respawned"));
+}
+
+void AMMOCharacter::HandleBasicAttack(AActor* Target, float Damage)
+{
+	if (!BasicAttackAnimation)
+	{
+		return;
+	}
+
+	if (UAnimInstance* AnimInstance = GetMesh()->GetAnimInstance())
+	{
+		AnimInstance->PlaySlotAnimationAsDynamicMontage(BasicAttackAnimation, TEXT("DefaultSlot"), 0.1f, 0.2f, BasicAttackAnimationPlayRate);
+	}
+}
+
+void AMMOCharacter::TickRegeneration()
+{
+	if (IsDead() || Health->GetCurrentHealth() >= Health->GetMaxHealth())
+	{
+		return;
+	}
+
+	const double Now = GetWorld()->GetTimeSeconds();
+	const double LastCombat = FMath::Max(LastDamageTakenTime, Combat->GetLastAttackTime());
+	if (Now - LastCombat >= OutOfCombatDelay)
+	{
+		Health->Heal(OutOfCombatRegenPerSecond * 0.5f);
+	}
 }
